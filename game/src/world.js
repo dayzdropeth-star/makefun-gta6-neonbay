@@ -1,12 +1,33 @@
 // Neon Bay's city: an 8x8 block grid built procedurally from a seeded RNG.
 // Everything here is original geometry + canvas textures; no external assets.
-import { makeRng, range, pick, chance } from './rng.js';
+//
+// The world owns the static city (buildings, ground, streetlights) and the
+// spawn state for everything that moves: parked cars, traffic cars,
+// pedestrians, and street-cash pickups. The game loop in main.js moves
+// traffic and pedestrians each frame; this module only builds them.
+import { makeRng, range, pick, chance, weighted } from './rng.js';
 
-export const BLOCK = 44;      // building block size
-export const STREET = 14;     // street width
+export const BLOCK = 44; // building block size
+export const STREET = 14; // street width
 export const PITCH = BLOCK + STREET; // 58
-export const GRID = 8;        // blocks per side
+export const GRID = 8; // blocks per side
 export const HALF = (GRID * BLOCK + (GRID + 1) * STREET) / 2; // 239
+
+// Traffic vehicle classes. Each kind differs in size, cruise speed and
+// collision radius, so a truck reads — and drives — differently from a
+// sedan or a cab. `weave` is how far an aggressive driver of this kind
+// drifts across lanes; trucks barely change lanes, cabs weave the most.
+// Weights are used by the seeded spawn roll.
+export const TRAFFIC_KINDS = {
+  sedan: { weight: 6, length: 4.4, width: 2.0, topSpeed: [8, 12.5], radius: 2.4, weave: 5.5 },
+  taxi: { weight: 3, length: 4.4, width: 2.0, topSpeed: [10, 14.5], radius: 2.4, weave: 5.5 },
+  truck: { weight: 2, length: 6.2, width: 2.3, topSpeed: [5.5, 8.5], radius: 3.2, weave: 1.5 },
+};
+
+// How many traffic cars the city spawns. The game loop varies how many of
+// them are actually on the road (rush hour), but the pool itself is fixed
+// so a seed always builds the same fleet.
+export const TRAFFIC_COUNT = 14;
 
 export function streetCenters() {
   const list = [];
@@ -14,9 +35,12 @@ export function streetCenters() {
   return list;
 }
 
-function windowTexture(rng) {
+// --- Canvas textures -------------------------------------------------------
+
+function makeWindowTexture(rng) {
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 128;
+  c.width = 64;
+  c.height = 128;
   const g = c.getContext('2d');
   g.fillStyle = '#14101f';
   g.fillRect(0, 0, 64, 128);
@@ -34,16 +58,17 @@ function windowTexture(rng) {
   return tex;
 }
 
-function groundTexture() {
+function makeGroundTexture() {
   const size = 1024;
   const c = document.createElement('canvas');
-  c.width = size; c.height = size;
+  c.width = size;
+  c.height = size;
   const g = c.getContext('2d');
   const scale = size / (HALF * 2);
   const toPx = (v) => (v + HALF) * scale;
   g.fillStyle = '#1c1a24'; // asphalt base
   g.fillRect(0, 0, size, size);
-  // Sidewalk slabs (lighter squares around each block)
+  // Sidewalk slabs (lighter squares around each block).
   g.fillStyle = '#33304a';
   for (let bx = 0; bx < GRID; bx++) {
     for (let bz = 0; bz < GRID; bz++) {
@@ -52,7 +77,7 @@ function groundTexture() {
       g.fillRect(toPx(x0 - 2), toPx(z0 - 2), (BLOCK + 4) * scale, (BLOCK + 4) * scale);
     }
   }
-  // Road centre dashes
+  // Road centre dashes.
   g.fillStyle = '#8f8a5a';
   const streets = streetCenters();
   for (const s of streets) {
@@ -61,7 +86,7 @@ function groundTexture() {
       g.fillRect(toPx(s - 0.5), toPx(v), 1 * scale, 8 * scale);
     }
   }
-  // Crosswalk stripes at intersections
+  // Crosswalk stripes at intersections.
   g.fillStyle = 'rgba(220, 220, 235, 0.5)';
   for (const sx of streets) {
     for (const sz of streets) {
@@ -77,32 +102,75 @@ function groundTexture() {
   return tex;
 }
 
-export function makeCarMesh(color, police) {
+// --- Vehicle meshes --------------------------------------------------------
+
+// kind: 'sedan' (default), 'taxi' (yellow cab + roof sign), 'truck'
+// (longer, taller, bigger wheels). Police cars are sedans with a light
+// bar and a white stripe. `color` is ignored for taxis — cabs are yellow.
+export function makeCarMesh(color, police, kind) {
+  const spec = TRAFFIC_KINDS[kind] || TRAFFIC_KINDS.sedan;
+  const isTruck = kind === 'truck';
+  const isTaxi = kind === 'taxi';
   const group = new THREE.Group();
-  const paint = new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.35 });
+  const paint = new THREE.MeshStandardMaterial({
+    color: isTaxi ? 0xf2c200 : color,
+    metalness: 0.55,
+    roughness: 0.35,
+  });
   const glass = new THREE.MeshStandardMaterial({ color: 0x0e1a26, metalness: 0.7, roughness: 0.15 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.62, 4.4), paint);
-  body.position.y = 0.55;
+  const len = spec.length;
+  const bodyH = isTruck ? 0.95 : 0.62;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(spec.width, bodyH, len), paint);
+  body.position.y = isTruck ? 0.72 : 0.55;
   group.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.58, 2.2), glass);
-  cabin.position.set(0, 1.12, -0.25);
+  const cabin = new THREE.Mesh(
+    new THREE.BoxGeometry(isTruck ? 2.0 : 1.75, isTruck ? 0.85 : 0.58, isTruck ? 2.0 : 2.2),
+    isTruck ? paint : glass,
+  );
+  cabin.position.set(0, isTruck ? 1.6 : 1.12, isTruck ? 0.9 : -0.25);
   group.add(cabin);
-  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 10);
+  const wheelR = isTruck ? 0.44 : 0.36;
+  const wheelGeo = new THREE.CylinderGeometry(wheelR, wheelR, 0.28, 10);
   wheelGeo.rotateZ(Math.PI / 2);
   const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.9 });
-  for (const [x, z] of [[-0.95, 1.45], [0.95, 1.45], [-0.95, -1.45], [0.95, -1.45]]) {
+  const wz = len / 2 - 0.75;
+  const wx = spec.width / 2 - 0.05;
+  for (const [x, z] of [
+    [-wx, wz],
+    [wx, wz],
+    [-wx, -wz],
+    [wx, -wz],
+  ]) {
     const w = new THREE.Mesh(wheelGeo, wheelMat);
-    w.position.set(x, 0.36, z);
+    w.position.set(x, wheelR, z);
     group.add(w);
   }
-  const lightMat = new THREE.MeshStandardMaterial({ color: 0xfff6c0, emissive: 0xffe9a0, emissiveIntensity: 1.6 });
+  const lightMat = new THREE.MeshStandardMaterial({
+    color: 0xfff6c0,
+    emissive: 0xffe9a0,
+    emissiveIntensity: 1.6,
+  });
   const headBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 0.08), lightMat);
-  headBar.position.set(0, 0.62, 2.22);
+  headBar.position.set(0, 0.62, len / 2 + 0.02);
   group.add(headBar);
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff2020, emissiveIntensity: 1.2 });
+  const tailMat = new THREE.MeshStandardMaterial({
+    color: 0x550000,
+    emissive: 0xff2020,
+    emissiveIntensity: 1.2,
+  });
   const tailBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 0.08), tailMat);
-  tailBar.position.set(0, 0.62, -2.22);
+  tailBar.position.set(0, 0.62, -len / 2 - 0.02);
   group.add(tailBar);
+  if (isTaxi) {
+    // Roof sign so cabs read instantly at a distance.
+    const sign = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9, 0.22, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffd23d, emissiveIntensity: 1.2 }),
+    );
+    sign.position.set(0, 1.55, -0.25);
+    sign.name = 'taxisign';
+    group.add(sign);
+  }
   if (police) {
     const bar = new THREE.Mesh(
       new THREE.BoxGeometry(1.1, 0.18, 0.4),
@@ -118,9 +186,19 @@ export function makeCarMesh(color, police) {
     stripe.position.y = 0.72;
     group.add(stripe);
   }
-  group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  group.traverse((o) => {
+    if (o.isMesh) o.castShadow = true;
+  });
   return group;
 }
+
+// Roll a traffic kind from the seeded stream, weighted toward sedans.
+function rollTrafficKind(rng) {
+  const entries = Object.entries(TRAFFIC_KINDS).map(([name, spec]) => [name, spec.weight]);
+  return weighted(rng, entries);
+}
+
+// --- City construction -----------------------------------------------------
 
 export function buildWorld(scene, seed) {
   const rng = makeRng(seed);
@@ -150,20 +228,20 @@ export function buildWorld(scene, seed) {
   // Ground with painted roads.
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(HALF * 2 + 40, HALF * 2 + 40),
-    new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 0.95 }),
+    new THREE.MeshStandardMaterial({ map: makeGroundTexture(), roughness: 0.95 }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
 
   // Buildings, one or two per block, with neon signs on some.
-  // Facade materials are cached by (window map, tint, emissive map): the city
-  // reuses a handful of materials instead of minting a new one per building
-  // (~91 buildings), which cuts material/program churn at render time.
-  const winTexes = [windowTexture(rng), windowTexture(rng), windowTexture(rng)];
+  // Facade materials are cached by (window map, tint, emissive map): the
+  // city reuses a handful of materials instead of minting a new one per
+  // building (~91 buildings), which cuts material/program churn.
+  const winTexes = [makeWindowTexture(rng), makeWindowTexture(rng), makeWindowTexture(rng)];
   const facadeTints = [0xffffff, 0xd8c8ff, 0xffe0c8, 0xc8e8ff];
   const facadeMats = new Map();
-  function facadeMaterial() {
+  function pickFacadeMaterial() {
     const mapIdx = Math.floor(rng() * winTexes.length);
     const tint = pick(rng, facadeTints);
     const emisIdx = Math.floor(rng() * winTexes.length);
@@ -183,8 +261,9 @@ export function buildWorld(scene, seed) {
     return mat;
   }
   // Roof caps share one material per roof colour, also cached.
+  const roofColors = [0x241a33, 0x1c2438, 0x2c1a24, 0x18242c];
   const roofMats = new Map();
-  function roofMaterial() {
+  function pickRoofMaterial() {
     const color = pick(rng, roofColors);
     let mat = roofMats.get(color);
     if (!mat) {
@@ -194,25 +273,27 @@ export function buildWorld(scene, seed) {
     return mat;
   }
   const neonColors = [0xff2e88, 0x00e5ff, 0xffb020, 0x7dff5e, 0xb46bff];
-  const roofColors = [0x241a33, 0x1c2438, 0x2c1a24, 0x18242c];
   for (let bx = 0; bx < GRID; bx++) {
     for (let bz = 0; bz < GRID; bz++) {
       const cx = -HALF + STREET + BLOCK / 2 + bx * PITCH;
       const cz = -HALF + STREET + BLOCK / 2 + bz * PITCH;
       const twin = chance(rng, 0.45);
       const spots = twin
-        ? [[cx - BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4], [cx + BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4]]
+        ? [
+            [cx - BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4],
+            [cx + BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4],
+          ]
         : [[cx, cz, BLOCK - 4, BLOCK - 4]];
       for (const [x, z, w, d] of spots) {
         const h = range(rng, 9, 42);
-        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMaterial());
+        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), pickFacadeMaterial());
         b.position.set(x, h / 2, z);
         b.receiveShadow = true;
         scene.add(b);
         world.buildingBoxes.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
         // Flat roof cap in one of the rooftop colours, so the skyline reads
         // from above (and the roof palette actually gets used).
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.5, d + 0.6), roofMaterial());
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.5, d + 0.6), pickRoofMaterial());
         roof.position.set(x, h + 0.25, z);
         scene.add(roof);
         // Neon sign strip on taller buildings.
@@ -233,7 +314,11 @@ export function buildWorld(scene, seed) {
   const poleGeo = new THREE.CylinderGeometry(0.12, 0.16, 6.4, 6);
   const lampGeo = new THREE.SphereGeometry(0.42, 8, 6);
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x22222c, roughness: 0.7, metalness: 0.5 });
-  const lampMat = new THREE.MeshStandardMaterial({ color: 0xffe9a0, emissive: 0xffe9a0, emissiveIntensity: 2.0 });
+  const lampMat = new THREE.MeshStandardMaterial({
+    color: 0xffe9a0,
+    emissive: 0xffe9a0,
+    emissiveIntensity: 2.0,
+  });
   const spots = [];
   for (const s of world.streets) {
     for (let v = -HALF + 20; v < HALF - 10; v += 58) {
@@ -253,28 +338,73 @@ export function buildWorld(scene, seed) {
   scene.add(lamps);
   world.streetlights = [lamps];
 
-  // Parked cars along street edges.
+  // Parked cars along street edges — a mix of sedans, cabs and one truck.
   const carColors = [0xd83a3a, 0x3a7dd8, 0x38b24a, 0xd8b23a, 0x8a4fd8, 0xd8d8d8, 0x2c2c34, 0xff7a3d];
   for (let i = 0; i < 16; i++) {
     const horizontal = chance(rng, 0.5);
     const s = pick(rng, world.streets);
     const v = range(rng, -HALF + 24, HALF - 24);
-    const mesh = makeCarMesh(pick(rng, carColors), false);
-    if (horizontal) { mesh.position.set(v, 0, s + 4.6); mesh.rotation.y = chance(rng, 0.5) ? 0 : Math.PI; }
-    else { mesh.position.set(s + 4.6, 0, v); mesh.rotation.y = chance(rng, 0.5) ? Math.PI / 2 : -Math.PI / 2; }
+    const kind = rollTrafficKind(rng);
+    const mesh = makeCarMesh(pick(rng, carColors), false, kind);
+    if (horizontal) {
+      mesh.position.set(v, 0, s + 4.6);
+      mesh.rotation.y = chance(rng, 0.5) ? 0 : Math.PI;
+    } else {
+      mesh.position.set(s + 4.6, 0, v);
+      mesh.rotation.y = chance(rng, 0.5) ? Math.PI / 2 : -Math.PI / 2;
+    }
     scene.add(mesh);
-    world.parkedCars.push({ mesh, x: mesh.position.x, z: mesh.position.z, angle: mesh.rotation.y, taken: false });
+    world.parkedCars.push({
+      mesh,
+      x: mesh.position.x,
+      z: mesh.position.z,
+      angle: mesh.rotation.y,
+      kind,
+      taken: false,
+    });
   }
 
-  // Traffic cars cruising the streets.
-  for (let i = 0; i < 10; i++) {
-    const mesh = makeCarMesh(pick(rng, carColors), false);
+  // Traffic cars cruising the streets. Each one rolls a kind (sedan / taxi
+  // / truck), a cruise speed inside its kind's band, and an "aggressive"
+  // flag: aggressive drivers weave between lanes and surge their speed,
+  // calm ones hold a steady lane and speed. All rolls are seeded, so a
+  // seed always builds the same fleet with the same temperaments.
+  for (let i = 0; i < TRAFFIC_COUNT; i++) {
+    const kind = rollTrafficKind(rng);
+    const spec = TRAFFIC_KINDS[kind];
+    const mesh = makeCarMesh(pick(rng, carColors), false, kind);
     scene.add(mesh);
     const car = {
-      mesh, horizontal: chance(rng, 0.5), dir: chance(rng, 0.5) ? 1 : -1,
-      street: pick(rng, world.streets), pos: range(rng, -HALF + 20, HALF - 20),
-      speed: range(rng, 7, 11), stolen: false,
+      mesh,
+      kind,
+      // Collision radius used when the player bumps into this car.
+      radius: spec.radius,
+      // Cruise speed: the top of the kind's band; the game loop scales it
+      // down in rush hour and varies it for aggressive drivers.
+      topSpeed: range(rng, spec.topSpeed[0], spec.topSpeed[1]),
+      speed: 0,
+      horizontal: chance(rng, 0.5),
+      dir: chance(rng, 0.5) ? 1 : -1,
+      street: pick(rng, world.streets),
+      pos: range(rng, -HALF + 20, HALF - 20),
+      // Lane offset from the street centre line; aggressive drivers drift
+      // it around, calm drivers sit near their home lane. `weave` caps how
+      // far this kind of vehicle ever drifts (trucks stay put).
+      laneOffset: 0,
+      laneTarget: 0,
+      laneTimer: range(rng, 2, 6),
+      weave: spec.weave,
+      aggressive: chance(rng, 0.3),
+      // Phase for the speed-surge sine wave (aggressive drivers only).
+      surgePhase: range(rng, 0, Math.PI * 2),
+      // Rush hour: only the first N cars are on the road at any time;
+      // the rest wait off-street. main.js flips this flag.
+      active: true,
+      stolen: false,
     };
+    car.speed = car.topSpeed;
+    car.laneOffset = car.dir > 0 ? -3.4 : 3.4;
+    car.laneTarget = car.laneOffset;
     world.trafficCars.push(car);
   }
 
@@ -296,9 +426,14 @@ export function buildWorld(scene, seed) {
     g.add(head);
     scene.add(g);
     world.pedestrians.push({
-      mesh: g, x: range(rng, -HALF + 10, HALF - 10), z: range(rng, -HALF + 10, HALF - 10),
-      angle: range(rng, 0, Math.PI * 2), speed: range(rng, 1.1, 2.0),
-      state: 'walk', timer: range(rng, 2, 8), down: 0,
+      mesh: g,
+      x: range(rng, -HALF + 10, HALF - 10),
+      z: range(rng, -HALF + 10, HALF - 10),
+      angle: range(rng, 0, Math.PI * 2),
+      speed: range(rng, 1.1, 2.0),
+      state: 'walk',
+      timer: range(rng, 2, 8),
+      down: 0,
     });
   }
 
@@ -327,7 +462,10 @@ export function collideBuildings(world, x, z, r) {
     const dz = z - cz;
     const d2 = dx * dx + dz * dz;
     if (d2 < r * r) {
-      if (d2 < 0.0001) { x = b.maxX + r; continue; }
+      if (d2 < 0.0001) {
+        x = b.maxX + r;
+        continue;
+      }
       const d = Math.sqrt(d2);
       x = cx + (dx / d) * r;
       z = cz + (dz / d) * r;
@@ -339,4 +477,8 @@ export function collideBuildings(world, x, z, r) {
   return { x, z };
 }
 
-export function dist2(ax, az, bx, bz) { const dx = ax - bx; const dz = az - bz; return dx * dx + dz * dz; }
+export function dist2(ax, az, bx, bz) {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return dx * dx + dz * dz;
+}
