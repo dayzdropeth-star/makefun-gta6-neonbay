@@ -1,7 +1,8 @@
 // NEON BAY — open-world crime game. All code written for this entry.
 // Third-person on foot + arcade driving, traffic, pedestrians, wanted/police,
-// two story missions plus repeatable courier jobs, melee combat, HUD + minimap,
-// WebAudio synth sound, localStorage save, and ?shot= staging for screenshots.
+// three story missions (parcel, police escape, taxi) plus repeatable
+// courier jobs, melee combat, HUD + minimap, WebAudio synth sound,
+// localStorage save, and ?shot= staging for screenshots.
 import { buildWorld, makeCarMesh, collideBuildings, dist2, HALF, GRID, PITCH, BLOCK, STREET } from './world.js';
 import { makeRng, range, pick } from './rng.js';
 import { SoundFX } from './audio.js';
@@ -11,6 +12,26 @@ const params = new URLSearchParams(location.search);
 const SEED = Number(params.get('seed') || 7) || 7;
 const SHOT = params.get('shot') || '';
 const SAVE_KEY = 'neonbay.save.v1';
+
+// Story structure: 3 story missions, then courier jobs repeat forever.
+const TOTAL_STORY_MISSIONS = 3;
+const TAXI_TIME_LIMIT = 75; // seconds to reach the drop-off
+const TAXI_FARE = 600; // base fare
+const TIP_PER_SECOND = 5; // tip per second left on the clock
+const TIP_CAP = 300; // max tip
+
+// Camera rigs. The driving rig sits far back and high so the streets,
+// traffic and skyline read in the frame instead of one building filling it.
+// The on-foot rig stays close, as in v1. The rig lerps between the two,
+// so entering / leaving a car is a smooth glide, not a snap.
+const FOOT_CAM = { dist: 8.5, height: 3.4, lookAhead: 0 };
+const DRIVE_CAM = { dist: 15, height: 7.4, lookAhead: 6 };
+
+// Rush hour: traffic density follows a slow sine cycle (~2 minutes) with a
+// seeded phase, so a seed always has the same busy and quiet windows.
+const RUSH_PERIOD = 0.05; // rad per second of game time
+const RUSH_MIN_CARS = 6; // quiet streets
+const RUSH_MAX_CARS = 14; // gridlock (the whole fleet)
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -59,22 +80,30 @@ const game = {
   hiddenTime: 0,
   camYaw: Math.PI * 0.75,
   camPitch: 0.32,
+  camDist: FOOT_CAM.dist,
+  camHeight: FOOT_CAM.height,
   keys: {},
   punchCooldown: 0,
   punchAnim: 0,
   hudTimer: 0,
   mapTimer: 0,
-  mission: null, // {id, stage, tx, tz, timer}
+  mission: null, // {id, stage, tx, tz, timer, color}
   beacon: null,
+  taxiPassenger: null,
   police: [],
   playerCar: null,
   exitCooldown: 0,
+  // Rush-hour cycle: seeded phase, current level 0..1, one-shot announcement.
+  rushPhase: 0,
+  rushLevel: 0,
+  rushAnnounced: false,
 };
 
 // Gameplay randomness (mission targets, traffic respawns, pedestrian turns,
 // police spawn angles) draws from a second stream seeded off the same seed,
 // so ?seed= replays the same mission flow instead of Math.random() noise.
 const playRng = makeRng((SEED ^ 0x9e3779b9) >>> 0);
+game.rushPhase = playRng() * Math.PI * 2;
 
 const saved = loadSave();
 if (saved) {
@@ -84,7 +113,7 @@ if (saved) {
     game.missionsDone = saved.missionsDone || 0;
     game.totalEarned = saved.totalEarned || 0;
     sfx.ensure(); sfx.click();
-    startGame();
+    beginGame();
   });
 }
 
@@ -123,12 +152,12 @@ const MISSION_POINTS = [
   { x: -116, z: 58 }, { x: 116, z: -58 }, { x: 58, z: 174 }, { x: -174, z: -116 },
   { x: 174, z: 116 }, { x: 0, z: -174 }, { x: -58, z: -174 }, { x: 116, z: 174 },
 ];
-function pickPoint(exclude) {
+function pickMissionPoint(exclude) {
   const opts = MISSION_POINTS.filter((p) => !exclude || dist2(p.x, p.z, exclude.x, exclude.z) > 10000);
   return pick(playRng, opts);
 }
 
-function makeBeacon(x, z, color) {
+function spawnBeacon(x, z, color) {
   const g = new THREE.Group();
   const pillar = new THREE.Mesh(
     new THREE.CylinderGeometry(2.2, 2.2, 34, 16, 1, true),
@@ -153,73 +182,119 @@ function makeBeacon(x, z, color) {
   scene.add(g);
   return g;
 }
-function clearBeacon() {
+function removeBeacon() {
   if (game.beacon) { scene.remove(game.beacon); game.beacon = null; }
 }
 
-function startMission1() {
-  const p = pickPoint({ x: player.x, z: player.z });
-  game.mission = { id: 1, stage: 'pickup', tx: p.x, tz: p.z, timer: 0 };
-  clearBeacon();
-  game.beacon = makeBeacon(p.x, p.z, 0xffd23d);
+// The taxi passenger waits on the sidewalk at the pickup point. Built like
+// a pedestrian but in a bright cyan jacket so the fare is easy to spot.
+function spawnPassengerFigure(x, z) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.4, 1.15, 8),
+    new THREE.MeshStandardMaterial({ color: 0x3dd8ff, roughness: 0.8 }),
+  );
+  body.position.y = 0.95;
+  g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.26, 10, 8),
+    new THREE.MeshStandardMaterial({ color: 0xe8b98a, roughness: 0.7 }),
+  );
+  head.position.y = 1.75;
+  g.add(head);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  return g;
+}
+function removePassengerFigure() {
+  if (game.taxiPassenger) { scene.remove(game.taxiPassenger); game.taxiPassenger = null; }
+}
+
+function beginParcelMission() {
+  const p = pickMissionPoint({ x: player.x, z: player.z });
+  game.mission = { id: 1, stage: 'pickup', tx: p.x, tz: p.z, timer: 0, color: 0xffd23d };
+  removeBeacon();
+  game.beacon = spawnBeacon(p.x, p.z, 0xffd23d);
   objTitle.textContent = 'MISI 1 — PAKET NEON';
   objText.textContent = 'Ambil paket di penanda kuning, lalu antar ke tujuan.';
   toast('Misi 1: ambil paket di penanda kuning', 4);
 }
-function startMission2() {
-  const p = pickPoint({ x: player.x, z: player.z });
-  game.mission = { id: 2, stage: 'escape', tx: p.x, tz: p.z, timer: 90 };
-  setWanted(3);
-  clearBeacon();
-  game.beacon = makeBeacon(p.x, p.z, 0x3dd8ff);
+function beginEscapeMission() {
+  const p = pickMissionPoint({ x: player.x, z: player.z });
+  game.mission = { id: 2, stage: 'escape', tx: p.x, tz: p.z, timer: 90, color: 0x3dd8ff };
+  setWantedLevel(3);
+  removeBeacon();
+  game.beacon = spawnBeacon(p.x, p.z, 0x3dd8ff);
   objTitle.textContent = 'MISI 2 — KABUR DARI POLISI';
   objText.textContent = 'Polisi mengejarmu! Capai rumah aman biru sebelum waktu habis.';
   toast('Misi 2: kabur! Capai rumah aman biru', 4);
   sfx.mission();
 }
-function startCourier() {
-  const p = pickPoint({ x: player.x, z: player.z });
-  game.mission = { id: 3, stage: 'pickup', tx: p.x, tz: p.z, timer: 0 };
-  clearBeacon();
-  game.beacon = makeBeacon(p.x, p.z, 0x7dff9a);
+function beginTaxiMission() {
+  const p = pickMissionPoint({ x: player.x, z: player.z });
+  game.mission = { id: 3, stage: 'pickup', tx: p.x, tz: p.z, timer: 0, color: 0xffd23d };
+  removeBeacon();
+  removePassengerFigure();
+  game.beacon = spawnBeacon(p.x, p.z, 0xffd23d);
+  game.taxiPassenger = spawnPassengerFigure(p.x, p.z);
+  objTitle.textContent = 'MISI 3 — TAKSI KILAT';
+  objText.textContent = `Jemput penumpang di penanda kuning. Tarif $${TAXI_FARE} + tip kecepatan.`;
+  toast('Misi 3: jemput penumpang taksi!', 4);
+  sfx.horn();
+}
+function beginCourierJob() {
+  const p = pickMissionPoint({ x: player.x, z: player.z });
+  game.mission = { id: 4, stage: 'pickup', tx: p.x, tz: p.z, timer: 0, color: 0x7dff9a };
+  removeBeacon();
+  game.beacon = spawnBeacon(p.x, p.z, 0x7dff9a);
   objTitle.textContent = 'PEKERJAAN — ANTAR PAKET';
   objText.textContent = 'Ambil paket hijau, antar ke tujuan. Bayaran $200.';
 }
-function completeMission(reward, next) {
+function finishMission(reward, next, note) {
   game.money += reward;
   game.totalEarned += reward;
   game.missionsDone += 1;
-  clearBeacon();
+  removeBeacon();
   sfx.mission();
   writeSave();
-  if (next === 'm2') { toast(`Paket terkirim! +$${reward}`, 4); startMission2(); }
-  else if (next === 'courier') { toast(`Selamat dari polisi! +$${reward}`, 4); startCourier(); }
-  else { toast(`Paket terkirim! +$${reward}`, 4); startCourier(); }
+  if (next === 'm2') { toast(note || `Paket terkirim! +$${reward}`, 4); beginEscapeMission(); }
+  else if (next === 'taxi') { toast(note || `Selamat dari polisi! +$${reward}`, 4); beginTaxiMission(); }
+  else { toast(note || `Paket terkirim! +$${reward}`, 4); beginCourierJob(); }
 }
-function failMission2() {
+function failEscapeMission() {
   game.mission = null;
-  clearBeacon();
+  removeBeacon();
   objTitle.textContent = 'NEON BAY — BEBAS';
   objText.textContent = 'Misi kabur gagal, tapi Raka masih bebas. Cari pekerjaan baru di kota.';
   toast('Misi kabur gagal — polisi masih memburumu', 4);
-  setTimeout(() => { if (!game.mission && game.state === 'play') startCourier(); }, 8000);
+  setTimeout(() => { if (!game.mission && game.state === 'play') beginCourierJob(); }, 8000);
+}
+function failTaxiMission() {
+  game.mission = null;
+  removeBeacon();
+  removePassengerFigure();
+  sfx.fail();
+  objTitle.textContent = 'NEON BAY — BEBAS';
+  objText.textContent = 'Waktu habis, penumpang turun dan pergi. Cari pekerjaan baru di kota.';
+  toast('Waktu habis — penumpang turun!', 4);
+  setTimeout(() => { if (!game.mission && game.state === 'play') beginCourierJob(); }, 6000);
 }
 
 // ---------- Wanted & police ----------
-function setWanted(n) {
+function setWantedLevel(n) {
   game.wanted = Math.max(0, Math.min(5, n));
   game.hiddenTime = 0;
-  syncPolice();
+  syncPoliceUnits();
 }
-function syncPolice() {
+function syncPoliceUnits() {
   const want = game.state === 'play' ? game.wanted : 0;
-  while (game.police.length < want) spawnPolice();
+  while (game.police.length < want) spawnPoliceUnit();
   while (game.police.length > want) {
     const p = game.police.pop();
     scene.remove(p.mesh);
   }
 }
-function spawnPolice() {
+function spawnPoliceUnit() {
   const mesh = makeCarMesh(0x1a1a22, true);
   scene.add(mesh);
   const a = range(playRng, 0, Math.PI * 2);
@@ -227,7 +302,7 @@ function spawnPolice() {
   const pz = player.z + Math.sin(a) * 70;
   game.police.push({ mesh, x: px, z: pz, angle: 0, speed: 0, ramCooldown: 0 });
 }
-function updatePolice(dt) {
+function updatePoliceChase(dt) {
   const tx = game.playerCar ? drive.mesh.position.x : player.x;
   const tz = game.playerCar ? drive.mesh.position.z : player.z;
   for (const p of game.police) {
@@ -252,7 +327,7 @@ function updatePolice(dt) {
     p.ramCooldown -= dt;
     if (d < 3.4 && p.ramCooldown <= 0) {
       p.ramCooldown = 0.9;
-      hurtPlayer(game.playerCar ? 7 : 14);
+      damagePlayer(game.playerCar ? 7 : 14);
       sfx.crash();
       if (game.playerCar) drive.speed *= 0.55;
       // Shove the police car back so it cannot chain-ram every frame.
@@ -263,22 +338,22 @@ function updatePolice(dt) {
     }
   }
 }
-function hurtPlayer(amount) {
+function damagePlayer(amount) {
   if (game.state !== 'play') return;
   game.health -= amount;
   if (game.health <= 0) {
     game.health = 0;
-    gameOver();
+    endGame();
   }
 }
 
 // ---------- Input ----------
 addEventListener('keydown', (e) => {
   game.keys[e.code] = true;
-  if (e.code === 'KeyE') tryEnterExitCar();
-  if (e.code === 'KeyF') punch();
+  if (e.code === 'KeyE') toggleCarEntry();
+  if (e.code === 'KeyF') throwPunch();
   if (e.code === 'KeyM') { const m = sfx.toggleMuted(); $('btnMute').textContent = m ? 'SUARA: OFF' : 'SUARA: ON'; toast(m ? 'Suara dimatikan (M)' : 'Suara dinyalakan (M)', 1.5); }
-  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+  if (e.code === 'KeyP' || e.code === 'Escape') togglePauseMenu();
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
 });
 addEventListener('keyup', (e) => { game.keys[e.code] = false; });
@@ -302,7 +377,7 @@ addEventListener('mousemove', (e) => {
     lastX = e.clientX; lastY = e.clientY;
   }
 });
-canvas.addEventListener('click', () => { if (game.state === 'play') punch(); });
+canvas.addEventListener('click', () => { if (game.state === 'play') throwPunch(); });
 document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) dragging = false; });
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -311,7 +386,7 @@ addEventListener('resize', () => {
 });
 
 // ---------- Cars: enter / exit / steal ----------
-function nearestCar(maxD) {
+function findNearestCar(maxD) {
   let best = null, bestD = maxD * maxD;
   const check = (mesh, x, z, kind, ref) => {
     const d = dist2(player.x, player.z, x, z);
@@ -322,18 +397,18 @@ function nearestCar(maxD) {
   for (const p of game.police) check(p.mesh, p.x, p.z, 'police', p);
   return best;
 }
-function tryEnterExitCar() {
+function toggleCarEntry() {
   if (game.state !== 'play' || game.exitCooldown > 0) return;
-  if (game.playerCar) { exitCar(); return; }
-  const near = nearestCar(5);
+  if (game.playerCar) { leaveCar(); return; }
+  const near = findNearestCar(5);
   if (!near) return;
   if (near.kind === 'police') { toast('Itu mobil polisi — terlalu berisiko!', 2); return; }
-  enterCar(near);
-  if (near.kind === 'parked') { setWanted(game.wanted + 1); toast('Mobil dicuri! Wanted naik ★', 2.5); }
-  else { setWanted(game.wanted + 2); toast('Mobil traffic dibajak! Wanted naik ★★', 2.5); }
+  boardCar(near);
+  if (near.kind === 'parked') { setWantedLevel(game.wanted + 1); toast('Mobil dicuri! Wanted naik ★', 2.5); }
+  else { setWantedLevel(game.wanted + 2); toast('Mobil traffic dibajak! Wanted naik ★★', 2.5); }
   sfx.click();
 }
-function enterCar(near) {
+function boardCar(near) {
   game.playerCar = near;
   drive.mesh = near.mesh;
   drive.speed = 0;
@@ -343,7 +418,7 @@ function enterCar(near) {
   player.mesh.visible = false;
   hudHint.textContent = 'WASD mengemudi · E keluar mobil';
 }
-function exitCar() {
+function leaveCar() {
   const c = game.playerCar;
   if (!c) return;
   const a = drive.mesh.rotation.y;
@@ -365,7 +440,7 @@ function exitCar() {
 }
 
 // ---------- Combat ----------
-function punch() {
+function throwPunch() {
   if (game.state !== 'play' || game.playerCar || game.punchCooldown > 0) return;
   game.punchCooldown = 0.45;
   game.punchAnim = 0.25;
@@ -377,26 +452,107 @@ function punch() {
     const d = Math.hypot(dx, dz);
     if (d < 2.4 && (dx * fx + dz * fz) / (d || 1) > 0.1) {
       ped.state = 'down'; ped.down = 4; ped.mesh.rotation.z = Math.PI / 2;
-      setWanted(game.wanted + 1);
+      setWantedLevel(game.wanted + 1);
       toast('Kamu memukul pejalan kaki! Wanted naik ★', 2);
     }
   }
 }
 
-// ---------- Traffic & pedestrians ----------
-function updateTraffic(dt) {
+// ---------- Rush hour & traffic ----------
+// Current rush level, 0 (quiet) to 1 (gridlock), from a slow sine cycle
+// with a seeded phase — the same seed always has the same busy windows.
+function rushLevelNow() {
+  return 0.5 + 0.5 * Math.sin(game.time * RUSH_PERIOD + game.rushPhase);
+}
+function rushActiveCount(level) {
+  return RUSH_MIN_CARS + Math.round(level * (RUSH_MAX_CARS - RUSH_MIN_CARS));
+}
+function distToPlayer(x, z) {
+  const px = game.playerCar ? drive.mesh.position.x : player.x;
+  const pz = game.playerCar ? drive.mesh.position.z : player.z;
+  return Math.hypot(x - px, z - pz);
+}
+// Bring a parked-off-street car back onto a road far from the player, so
+// rush-hour cars never pop into existence right in front of the camera.
+function activateTrafficCar(c) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    c.horizontal = playRng() < 0.5;
+    c.street = pick(playRng, world.streets);
+    c.dir = playRng() < 0.5 ? 1 : -1;
+    c.pos = c.dir > 0 ? -HALF + 14 : HALF - 14;
+    const lane = c.dir > 0 ? -3.4 : 3.4;
+    const x = c.horizontal ? c.pos : c.street + lane;
+    const z = c.horizontal ? c.street + lane : c.pos;
+    if (distToPlayer(x, z) > 45) break;
+  }
+  c.laneOffset = c.dir > 0 ? -3.4 : 3.4;
+  c.laneTarget = c.laneOffset;
+  c.laneTimer = range(playRng, 2, 6);
+  c.speed = c.topSpeed;
+  c.active = true;
+  c.mesh.visible = true;
+}
+function updateTrafficFlow(dt) {
+  // --- Rush hour: vary how many cars are on the road. ---
+  game.rushLevel = rushLevelNow();
+  const level = game.rushLevel;
+  if (level > 0.8 && !game.rushAnnounced) {
+    game.rushAnnounced = true;
+    // Only announce mid-game; the title screen already shows the city.
+    if (game.state === 'play') toast('Jam sibuk — jalanan makin padat!', 3);
+  } else if (level < 0.35) {
+    game.rushAnnounced = false;
+  }
+  const road = world.trafficCars.filter((c) => !c.stolen);
+  const desired = rushActiveCount(level);
+  let active = road.filter((c) => c.active).length;
+  if (active > desired) {
+    // Park the farthest cars first, so nothing vanishes near the player.
+    const actives = road.filter((c) => c.active).sort((a, b) =>
+      distToPlayer(b.mesh.position.x, b.mesh.position.z) - distToPlayer(a.mesh.position.x, a.mesh.position.z));
+    for (const c of actives.slice(0, active - desired)) {
+      c.active = false;
+      c.mesh.visible = false;
+    }
+  } else if (active < desired) {
+    for (const c of road.filter((c) => !c.active).slice(0, desired - active)) activateTrafficCar(c);
+  }
+  // --- Move every active car. ---
+  // Congestion slows everyone a little; aggressive drivers weave between
+  // lanes and surge their speed, calm ones hold a steady lane and pace.
+  const congestion = 1 - 0.22 * level;
   for (const c of world.trafficCars) {
-    if (c.stolen) continue;
+    if (!c.active || c.stolen) continue;
+    let cruise = c.topSpeed * congestion;
+    if (c.aggressive) {
+      const surge = 0.5 + 0.5 * Math.sin(game.time * 0.7 + c.surgePhase);
+      cruise *= 0.75 + 0.45 * surge;
+      c.laneTimer -= dt;
+      if (c.laneTimer <= 0) {
+        // Weave limit comes from the vehicle kind: cabs and sedans swing
+        // across the street, trucks barely leave their lane.
+        c.laneTarget = range(playRng, -c.weave, c.weave);
+        c.laneTimer = range(playRng, 2.5, 6);
+      }
+      c.laneOffset += (c.laneTarget - c.laneOffset) * Math.min(1, dt * 1.2);
+    }
+    c.speed += (cruise - c.speed) * Math.min(1, dt * 2);
     c.pos += c.dir * c.speed * dt;
     if (c.pos > HALF - 12 || c.pos < -HALF + 12) {
       c.horizontal = playRng() < 0.5;
-      c.street = world.streets[Math.floor(playRng() * world.streets.length)];
+      c.street = pick(playRng, world.streets);
       c.dir = playRng() < 0.5 ? 1 : -1;
       c.pos = c.dir > 0 ? -HALF + 14 : HALF - 14;
+      c.laneOffset = c.dir > 0 ? -3.4 : 3.4;
+      c.laneTarget = c.laneOffset;
     }
-    const lane = c.dir > 0 ? -3.4 : 3.4;
-    if (c.horizontal) { c.mesh.position.set(c.pos, 0, c.street + lane); c.mesh.rotation.y = c.dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
-    else { c.mesh.position.set(c.street + lane, 0, c.pos); c.mesh.rotation.y = c.dir > 0 ? 0 : Math.PI; }
+    if (c.horizontal) {
+      c.mesh.position.set(c.pos, 0, c.street + c.laneOffset);
+      c.mesh.rotation.y = c.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    } else {
+      c.mesh.position.set(c.street + c.laneOffset, 0, c.pos);
+      c.mesh.rotation.y = c.dir > 0 ? 0 : Math.PI;
+    }
   }
 }
 function updatePedestrians(dt) {
@@ -431,13 +587,13 @@ function updatePedestrians(dt) {
     // Run over by the player's car.
     if (game.playerCar && dPlayer < 2.2 && Math.abs(drive.speed) > 4 && ped.state !== 'down') {
       ped.state = 'down'; ped.down = 5; ped.mesh.rotation.z = Math.PI / 2;
-      setWanted(game.wanted + 1);
+      setWantedLevel(game.wanted + 1);
       sfx.crash();
       toast('Kamu menabrak pejalan kaki! Wanted naik ★', 2.5);
     }
   }
 }
-function updatePickups(dt) {
+function updateStreetCash(dt) {
   for (const p of world.pickups) {
     if (p.taken) continue;
     p.spin += dt;
@@ -458,7 +614,7 @@ function updatePickups(dt) {
 }
 
 // ---------- Driving physics ----------
-function updateDriving(dt) {
+function drivePlayerCar(dt) {
   const k = game.keys;
   const forward = (k.KeyW || k.ArrowUp) ? 1 : 0;
   const back = (k.KeyS || k.ArrowDown) ? 1 : 0;
@@ -482,13 +638,14 @@ function updateDriving(dt) {
     drive.speed *= 0.4;
   }
   nx = c.x; nz = c.z;
-  // Bump traffic cars.
+  // Bump traffic cars (trucks push back from farther away: bigger radius).
   for (const t of world.trafficCars) {
-    if (t.stolen) continue;
+    if (t.stolen || !t.active) continue;
     const d2 = dist2(nx, nz, t.mesh.position.x, t.mesh.position.z);
-    if (d2 < 21) {
+    const limit = t.radius + 2.2;
+    if (d2 < limit * limit) {
       const d = Math.sqrt(d2) || 1;
-      const push = (4.6 - d) * 0.5;
+      const push = (limit - d) * 0.5;
       nx += ((nx - t.mesh.position.x) / d) * push;
       nz += ((nz - t.mesh.position.z) / d) * push;
       if (Math.abs(drive.speed) > 10) { sfx.crash(); drive.speed *= 0.6; }
@@ -496,7 +653,7 @@ function updateDriving(dt) {
   }
   drive.mesh.position.x = nx;
   drive.mesh.position.z = nz;
-  // Camera follows behind the car.
+  // Chase camera swings behind the car.
   const wantYaw = na + Math.PI;
   let dy = wantYaw - game.camYaw;
   while (dy > Math.PI) dy -= Math.PI * 2;
@@ -506,7 +663,7 @@ function updateDriving(dt) {
 }
 
 // ---------- On-foot movement ----------
-function updateOnFoot(dt) {
+function moveOnFoot(dt) {
   const k = game.keys;
   const run = k.ShiftLeft || k.ShiftRight;
   const speed = run ? 9.5 : 5.2;
@@ -551,7 +708,7 @@ function updateOnFoot(dt) {
 }
 
 // ---------- Missions update ----------
-function updateMission(dt) {
+function tickMission(dt) {
   const m = game.mission;
   if (!m) return;
   const px = game.playerCar ? drive.mesh.position.x : player.x;
@@ -559,32 +716,56 @@ function updateMission(dt) {
   const d = Math.hypot(px - m.tx, pz - m.tz);
   if (m.id === 1 && m.stage === 'pickup' && d < 7) {
     m.stage = 'deliver';
-    const p = pickPoint({ x: m.tx, z: m.tz });
+    const p = pickMissionPoint({ x: m.tx, z: m.tz });
     m.tx = p.x; m.tz = p.z;
-    clearBeacon();
-    game.beacon = makeBeacon(p.x, p.z, 0xffd23d);
+    removeBeacon();
+    game.beacon = spawnBeacon(p.x, p.z, 0xffd23d);
     objText.textContent = 'Paket didapat! Antar ke penanda kuning berikutnya.';
     toast('Paket didapat — antar ke tujuan', 3);
     sfx.pickup();
   } else if (m.id === 1 && m.stage === 'deliver' && d < 7) {
     game.mission = null;
-    completeMission(500, 'm2');
+    finishMission(500, 'm2');
   } else if (m.id === 2 && m.stage === 'escape') {
     m.timer -= dt;
     objText.textContent = `Polisi mengejarmu! Capai rumah aman biru — ${Math.max(0, Math.ceil(m.timer))} dtk.`;
-    if (d < 7) { game.mission = null; setWanted(0); completeMission(800, 'courier'); }
-    else if (m.timer <= 0) failMission2();
+    if (d < 7) { game.mission = null; setWantedLevel(0); finishMission(800, 'taxi'); }
+    else if (m.timer <= 0) failEscapeMission();
   } else if (m.id === 3 && m.stage === 'pickup' && d < 7) {
+    // Passenger boards: start the fare clock and point at the drop-off.
     m.stage = 'deliver';
-    const p = pickPoint({ x: m.tx, z: m.tz });
+    m.timer = TAXI_TIME_LIMIT;
+    const p = pickMissionPoint({ x: m.tx, z: m.tz });
     m.tx = p.x; m.tz = p.z;
-    clearBeacon();
-    game.beacon = makeBeacon(p.x, p.z, 0x7dff9a);
+    m.color = 0xff7a3d;
+    removeBeacon();
+    removePassengerFigure();
+    game.beacon = spawnBeacon(p.x, p.z, 0xff7a3d);
+    objTitle.textContent = 'MISI 3 — TAKSI KILAT';
+    objText.textContent = `Penumpang naik! Antar ke penanda oranye — ${TAXI_TIME_LIMIT} dtk.`;
+    toast('Penumpang naik! Gas ke tujuan', 3);
+    sfx.ding();
+  } else if (m.id === 3 && m.stage === 'deliver') {
+    m.timer -= dt;
+    const left = Math.max(0, Math.ceil(m.timer));
+    objText.textContent = `Antar penumpang ke penanda oranye — ${left} dtk. Tip makin besar kalau cepat!`;
+    if (d < 7) {
+      game.mission = null;
+      const tip = Math.min(TIP_CAP, Math.max(0, Math.ceil(m.timer)) * TIP_PER_SECOND);
+      sfx.fare();
+      finishMission(TAXI_FARE + tip, 'courier', `Taksi selesai! +$${TAXI_FARE} + tip $${tip}`);
+    } else if (m.timer <= 0) failTaxiMission();
+  } else if (m.id === 4 && m.stage === 'pickup' && d < 7) {
+    m.stage = 'deliver';
+    const p = pickMissionPoint({ x: m.tx, z: m.tz });
+    m.tx = p.x; m.tz = p.z;
+    removeBeacon();
+    game.beacon = spawnBeacon(p.x, p.z, 0x7dff9a);
     objText.textContent = 'Paket didapat! Antar ke penanda hijau.';
     sfx.pickup();
-  } else if (m.id === 3 && m.stage === 'deliver' && d < 7) {
+  } else if (m.id === 4 && m.stage === 'deliver' && d < 7) {
     game.mission = null;
-    completeMission(200, 'courier');
+    finishMission(200, 'courier');
   }
   if (game.beacon) {
     game.beacon.children[2].rotation.y += dt * 2;
@@ -593,7 +774,7 @@ function updateMission(dt) {
 }
 
 // ---------- Wanted decay ----------
-function updateWanted(dt) {
+function tickWantedDecay(dt) {
   if (game.wanted === 0) return;
   let nearest = 1e9;
   for (const p of game.police) {
@@ -602,14 +783,14 @@ function updateWanted(dt) {
   }
   if (nearest > 55) {
     game.hiddenTime += dt;
-    if (game.hiddenTime > 6) { setWanted(game.wanted - 1); toast('Wanted turun — kamu berhasil bersembunyi', 2); }
+    if (game.hiddenTime > 6) { setWantedLevel(game.wanted - 1); toast('Wanted turun — kamu berhasil bersembunyi', 2); }
   } else game.hiddenTime = 0;
 }
 
 // ---------- HUD & minimap ----------
-function updateHUD(dt) {
+function refreshHUD(dt) {
   hudMoney.textContent = `$${game.money.toLocaleString('id-ID')}`;
-  hudMission.textContent = `${Math.min(game.missionsDone, 2)} / 2`;
+  hudMission.textContent = `${Math.min(game.missionsDone, TOTAL_STORY_MISSIONS)} / ${TOTAL_STORY_MISSIONS}`;
   hpFill.style.width = `${Math.max(0, game.health)}%`;
   let stars = '';
   for (let i = 1; i <= 5; i++) stars += i <= game.wanted ? '★' : '<span class="off">★</span>';
@@ -619,11 +800,11 @@ function updateHUD(dt) {
   // Toast lifetime runs on real elapsed time, not on the (variable) HUD tick.
   if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0) toastEl.textContent = ''; }
   if (!game.playerCar && game.state === 'play') {
-    const near = nearestCar(5);
+    const near = findNearestCar(5);
     hudHint.textContent = near ? (near.kind === 'police' ? 'Mobil polisi — jangan disentuh' : 'Tekan E untuk masuk mobil') : '';
   }
 }
-function drawMinimap() {
+function renderMinimap() {
   const S = 190, scale = S / (HALF * 2 + 20);
   const toMap = (x, z) => [(x + HALF + 10) * scale, (z + HALF + 10) * scale];
   mmCtx.clearRect(0, 0, S, S);
@@ -639,17 +820,17 @@ function drawMinimap() {
   // Pickups.
   mmCtx.fillStyle = '#7dff9a';
   for (const p of world.pickups) if (!p.taken) { const [mx, mz] = toMap(p.x, p.z); mmCtx.fillRect(mx - 1, mz - 1, 2, 2); }
-  // Mission marker.
+  // Mission marker, in the mission's own beacon colour.
   if (game.mission) {
     const [mx, mz] = toMap(game.mission.tx, game.mission.tz);
-    mmCtx.fillStyle = '#ffd23d';
+    mmCtx.fillStyle = '#' + game.mission.color.toString(16).padStart(6, '0');
     mmCtx.beginPath();
     mmCtx.moveTo(mx, mz - 6); mmCtx.lineTo(mx + 6, mz); mmCtx.lineTo(mx, mz + 6); mmCtx.lineTo(mx - 6, mz);
     mmCtx.closePath(); mmCtx.fill();
   }
-  // Traffic + parked cars.
+  // Traffic + parked cars (only cars actually on the road).
   mmCtx.fillStyle = '#3dd8ff';
-  for (const c of world.trafficCars) if (!c.stolen) { const [mx, mz] = toMap(c.mesh.position.x, c.mesh.position.z); mmCtx.fillRect(mx - 1.5, mz - 1.5, 3, 3); }
+  for (const c of world.trafficCars) if (!c.stolen && c.active) { const [mx, mz] = toMap(c.mesh.position.x, c.mesh.position.z); mmCtx.fillRect(mx - 1.5, mz - 1.5, 3, 3); }
   // Police.
   mmCtx.fillStyle = '#ff3d5e';
   for (const p of game.police) { const [mx, mz] = toMap(p.x, p.z); mmCtx.beginPath(); mmCtx.arc(mx, mz, 3, 0, 7); mmCtx.fill(); }
@@ -669,10 +850,10 @@ function drawMinimap() {
 }
 
 // ---------- Camera ----------
-// Reused scratch vector: updateCamera runs every frame, so it must not
+// Reused scratch vector: updateCameraRig runs every frame, so it must not
 // allocate a fresh THREE.Vector3 on each call.
 const camTarget = new THREE.Vector3();
-function updateCamera(dt) {
+function updateCameraRig(dt) {
   if (game.state === 'title') {
     // Slow orbit over the living city behind the title screen.
     const t = game.time * 0.045;
@@ -680,46 +861,60 @@ function updateCamera(dt) {
     camera.lookAt(0, 4, 0);
     return;
   }
-  const tx = game.playerCar ? drive.mesh.position.x : player.x;
-  const tz = game.playerCar ? drive.mesh.position.z : player.z;
-  const dist = game.playerCar ? 11 : 8.5;
-  const height = game.playerCar ? 4.6 : 3.4;
-  const cx = tx + Math.sin(game.camYaw) * dist;
-  const cz = tz + Math.cos(game.camYaw) * dist;
-  const cy = height + game.camPitch * 4;
+  // Glide the rig between the on-foot and driving setups: entering or
+  // leaving a car is a smooth zoom-out / zoom-in, never a snap cut.
+  const driving = !!game.playerCar;
+  const rig = driving ? DRIVE_CAM : FOOT_CAM;
+  const blend = Math.min(1, dt * 2.5);
+  game.camDist += (rig.dist - game.camDist) * blend;
+  game.camHeight += (rig.height - game.camHeight) * blend;
+  const tx = driving ? drive.mesh.position.x : player.x;
+  const tz = driving ? drive.mesh.position.z : player.z;
+  const cx = tx + Math.sin(game.camYaw) * game.camDist;
+  const cz = tz + Math.cos(game.camYaw) * game.camDist;
+  const cy = game.camHeight + game.camPitch * 4;
   camera.position.lerp(camTarget.set(cx, cy, cz), Math.min(1, dt * 8));
-  camera.lookAt(tx, game.playerCar ? 1.6 : 1.9, tz);
+  // While driving, look a few units ahead of the car so the road, the
+  // traffic and the next turn stay in frame.
+  let lx = tx, lz = tz;
+  if (driving) {
+    const a = drive.mesh.rotation.y;
+    lx += Math.sin(a) * DRIVE_CAM.lookAhead;
+    lz += Math.cos(a) * DRIVE_CAM.lookAhead;
+  }
+  camera.lookAt(lx, driving ? 1.8 : 1.9, lz);
 }
 
 // ---------- Screens / flow ----------
 function show(el) { el.style.display = 'flex'; }
 function hide(el) { el.style.display = 'none'; }
-function startGame() {
+function beginGame() {
   hide(startScreen); hide(pauseScreen); hide(overScreen);
   game.state = 'play';
-  if (!game.mission && game.missionsDone === 0) startMission1();
-  else if (!game.mission && game.missionsDone === 1) startMission2();
-  else if (!game.mission) startCourier();
+  if (!game.mission && game.missionsDone === 0) beginParcelMission();
+  else if (!game.mission && game.missionsDone === 1) beginEscapeMission();
+  else if (!game.mission && game.missionsDone === 2) beginTaxiMission();
+  else if (!game.mission) beginCourierJob();
   sfx.ensure();
 }
-function togglePause() {
+function togglePauseMenu() {
   if (game.state === 'play') { game.state = 'pause'; show(pauseScreen); if (document.pointerLockElement) document.exitPointerLock(); }
   else if (game.state === 'pause') { game.state = 'play'; hide(pauseScreen); }
 }
-function gameOver() {
+function endGame() {
   game.state = 'over';
   $('overText').textContent = `Raka tumbang dengan $${game.money} di kantong dan ${game.missionsDone} misi selesai.`;
   show(overScreen);
   if (document.pointerLockElement) document.exitPointerLock();
   writeSave();
 }
-$('btnStart').addEventListener('click', () => { sfx.ensure(); sfx.click(); startGame(); });
+$('btnStart').addEventListener('click', () => { sfx.ensure(); sfx.click(); beginGame(); });
 $('btnMute').addEventListener('click', () => {
   sfx.ensure();
   const m = sfx.toggleMuted();
   $('btnMute').textContent = m ? 'SUARA: OFF' : 'SUARA: ON';
 });
-$('btnResume').addEventListener('click', () => { sfx.click(); togglePause(); });
+$('btnResume').addEventListener('click', () => { sfx.click(); togglePauseMenu(); });
 $('btnRestart').addEventListener('click', () => { sfx.click(); location.reload(); });
 $('btnAgain').addEventListener('click', () => { sfx.click(); location.reload(); });
 
@@ -730,15 +925,15 @@ function step(dt) {
   game.exitCooldown = Math.max(0, game.exitCooldown - dt);
   game.punchCooldown = Math.max(0, game.punchCooldown - dt);
   game.punchAnim = Math.max(0, game.punchAnim - dt);
-  updateTraffic(dt);
+  updateTrafficFlow(dt);
   updatePedestrians(dt);
-  updatePickups(dt);
+  updateStreetCash(dt);
   if (game.state === 'play') {
-    if (game.playerCar) updateDriving(dt);
-    else updateOnFoot(dt);
-    updatePolice(dt);
-    updateMission(dt);
-    updateWanted(dt);
+    if (game.playerCar) drivePlayerCar(dt);
+    else moveOnFoot(dt);
+    updatePoliceChase(dt);
+    tickMission(dt);
+    tickWantedDecay(dt);
     if (game.wanted === 0 && game.health < 100) game.health = Math.min(100, game.health + 2 * dt);
     sfx.setEngine(game.playerCar ? Math.abs(drive.speed) / 40 : 0, !!game.playerCar);
     sfx.setSiren(game.wanted > 0, dt);
@@ -746,13 +941,13 @@ function step(dt) {
     sfx.setEngine(0, false);
     sfx.setSiren(false, dt);
   }
-  updateCamera(dt);
+  updateCameraRig(dt);
   // The 2D minimap and DOM HUD are expensive under software rendering,
   // so refresh them on a timer instead of every frame.
   game.hudTimer += dt;
-  if (game.hudTimer > 0.1) { updateHUD(game.hudTimer); game.hudTimer = 0; }
+  if (game.hudTimer > 0.1) { refreshHUD(game.hudTimer); game.hudTimer = 0; }
   game.mapTimer += dt;
-  if (game.mapTimer > 0.2) { drawMinimap(); game.mapTimer = 0; }
+  if (game.mapTimer > 0.2) { renderMinimap(); game.mapTimer = 0; }
 }
 function frame(now) {
   requestAnimationFrame(frame);
@@ -763,7 +958,7 @@ function frame(now) {
 }
 
 // ---------- Shot staging (deterministic screenshots) ----------
-function stageShot() {
+function stageScreenshot() {
   if (SHOT === 'play' || SHOT === 'end') {
     // Skip the title screen: drop straight into a live chase scene.
     hide(startScreen);
@@ -775,12 +970,12 @@ function stageShot() {
     const car = world.parkedCars[0];
     car.mesh.position.set(0, 0, 200);
     car.mesh.rotation.y = Math.PI;
-    enterCar({ mesh: car.mesh, kind: 'parked', ref: car });
-    setWanted(2);
-    startMission2();
+    boardCar({ mesh: car.mesh, kind: 'parked', ref: car });
+    setWantedLevel(2);
+    beginEscapeMission();
     game.mission.tx = 0; game.mission.tz = -116;
-    clearBeacon();
-    game.beacon = makeBeacon(0, -116, 0x3dd8ff);
+    removeBeacon();
+    game.beacon = spawnBeacon(0, -116, 0x3dd8ff);
     // Fast-forward: drive toward the beacon with a simple autopilot.
     for (let i = 0; i < 60 * 7; i++) {
       const dx = game.mission.tx - drive.mesh.position.x;
@@ -798,10 +993,10 @@ function stageShot() {
     game.health = 100; // staging chase damage doesn't carry into the frame
     if (SHOT === 'end') {
       game.health = 0;
-      gameOver();
+      endGame();
     }
   } else {
-    // Title: the camera orbits the living city (handled in updateCamera).
+    // Title: the camera orbits the living city (handled in updateCameraRig).
     game.state = 'title';
     camera.position.set(120, 70, 120);
     camera.lookAt(0, 0, 0);
@@ -809,6 +1004,6 @@ function stageShot() {
 }
 
 // ---------- Boot ----------
-if (SHOT) stageShot();
+if (SHOT) stageScreenshot();
 requestAnimationFrame(frame);
 window.__neonbay = { game, world, player, renderer, scene };
