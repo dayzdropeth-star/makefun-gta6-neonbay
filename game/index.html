@@ -3,38 +3,105 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="NEON BAY — game open-world crime orisinal: kota fiksi Neon Bay, mengemudi dan mencuri mobil, wanted 5 bintang, misi cerita, HUD + minimap. Berjalan offline dari file statis.">
-<title>NEON BAY — Open-World Crime</title>
+<meta name="description" content="NEON BAY v2 — game open-world crime orisinal: kota fiksi Neon Bay di senja neon. Mengemudi dan mencuri mobil, wanted 5 bintang, tiga misi cerita termasuk Taksi Kilat, kurir berulang, HUD + minimap. Berjalan offline dari file statis, tanpa aset game komersial.">
+<meta name="theme-color" content="#0b0714">
+<title>NEON BAY v2 — Open-World Crime di Kota Neon</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0714; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  :root {
+    --neon-pink: #ff3d9e;
+    --neon-yellow: #ffd23d;
+    --neon-cyan: #3dd8ff;
+    --neon-green: #7dff9a;
+    --ink: #f4efff;
+    --ink-dim: #c9b8e8;
+    --panel-bg: rgba(12, 8, 26, 0.66);
+    --panel-line: rgba(255, 64, 170, 0.38);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0714; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #f4efff; z-index: 5; }
-  .panel { background: rgba(12, 8, 26, 0.62); border: 1px solid rgba(255, 64, 170, 0.35); border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(2px); }
-  #stats { position: absolute; top: 12px; left: 12px; min-width: 210px; }
-  #stats .row { display: flex; justify-content: space-between; gap: 14px; font-size: 15px; line-height: 1.5; }
-  #stats .money { color: #7dff9a; font-weight: 700; }
-  #hpbar { height: 10px; background: #2a1230; border-radius: 6px; overflow: hidden; margin-top: 4px; }
-  #hpfill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3d7e, #ff7a3d); }
-  #wanted { position: absolute; top: 12px; right: 12px; font-size: 26px; letter-spacing: 4px; color: #ffd23d; text-shadow: 0 0 12px rgba(255, 210, 61, 0.7); }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: var(--ink); z-index: 5; }
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    padding: 8px 12px;
+    backdrop-filter: blur(2px);
+    box-shadow: 0 0 18px rgba(255, 61, 158, 0.12);
+  }
+  #stats { position: absolute; top: 12px; left: 12px; min-width: 216px; }
+  #stats .row { display: flex; justify-content: space-between; gap: 14px; font-size: 15px; line-height: 1.55; }
+  #stats .money { color: var(--neon-green); font-weight: 700; }
+  #stats .label { color: var(--ink-dim); }
+  #hpbar { height: 10px; background: #2a1230; border-radius: 6px; overflow: hidden; margin-top: 5px; }
+  #hpfill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3d7e, #ff7a3d); transition: width 0.2s ease-out; }
+  #wanted {
+    position: absolute; top: 12px; right: 12px;
+    font-size: 26px; letter-spacing: 4px; color: var(--neon-yellow);
+    text-shadow: 0 0 12px rgba(255, 210, 61, 0.7);
+  }
   #wanted .off { color: rgba(255, 255, 255, 0.22); text-shadow: none; }
-  #objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: 46vw; text-align: center; font-size: 15px; }
-  #objective b { color: #ffd23d; }
-  #speed { position: absolute; bottom: 14px; left: 14px; font-size: 26px; font-weight: 800; }
-  #speed small { font-size: 13px; font-weight: 400; color: #c9b8e8; }
-  #hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #e8dcff; }
-  #toast { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 700; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,0.8); text-align: center; }
-  #minimap { position: absolute; right: 12px; bottom: 12px; border: 1px solid rgba(255, 64, 170, 0.45); border-radius: 8px; background: rgba(10, 6, 20, 0.8); }
-  #btnMute { position: absolute; right: 12px; bottom: 214px; padding: 6px 12px; font-size: 12px; margin: 0; background: rgba(12, 8, 26, 0.62); color: #ffd23d; border: 1px solid rgba(255, 210, 61, 0.55); }
-  #crosshair { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.85); display: none; }
-  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 30%, rgba(64, 16, 96, 0.88), rgba(6, 3, 14, 0.96)); z-index: 10; color: #f4efff; }
-  .card { max-width: 620px; padding: 34px 40px; text-align: center; }
-  .card h1 { margin: 0; font-size: 58px; letter-spacing: 6px; background: linear-gradient(90deg, #ff3d9e, #ffb03d, #3dd8ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .card h2 { margin: 4px 0 18px; font-size: 15px; letter-spacing: 4px; color: #c9b8e8; font-weight: 500; }
+  #objective {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    max-width: 46vw; text-align: center; font-size: 15px; line-height: 1.45;
+  }
+  #objective b { color: var(--neon-yellow); }
+  #speed { position: absolute; bottom: 14px; left: 14px; font-size: 26px; font-weight: 800; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7); }
+  #speed small { font-size: 13px; font-weight: 400; color: var(--ink-dim); }
+  #hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #e8dcff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8); }
+  #toast {
+    position: absolute; top: 22%; left: 50%; transform: translateX(-50%);
+    font-size: 20px; font-weight: 700; color: #fff; text-align: center;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  }
+  #minimap {
+    position: absolute; right: 12px; bottom: 12px;
+    border: 1px solid rgba(255, 64, 170, 0.45); border-radius: 8px;
+    background: rgba(10, 6, 20, 0.8);
+  }
+  #btnMute {
+    position: absolute; right: 12px; bottom: 214px; padding: 6px 12px;
+    font-size: 12px; margin: 0; background: var(--panel-bg); color: var(--neon-yellow);
+    border: 1px solid rgba(255, 210, 61, 0.55); border-radius: 999px;
+  }
+  #crosshair {
+    position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
+    margin: -4px 0 0 -4px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.85); display: none;
+  }
+
+  /* ---------- Layar penuh (judul / jeda / game over) ---------- */
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 50% 28%, rgba(64, 16, 96, 0.88), rgba(6, 3, 14, 0.96));
+    z-index: 10; color: var(--ink);
+  }
+  .card { max-width: 660px; max-height: 96vh; overflow-y: auto; padding: 30px 40px; text-align: center; }
+  .card h1 {
+    margin: 0; font-size: 58px; letter-spacing: 6px;
+    background: linear-gradient(90deg, var(--neon-pink), #ffb03d, var(--neon-cyan));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .card h1.small { font-size: 40px; }
+  .card h2 { margin: 4px 0 16px; font-size: 15px; letter-spacing: 4px; color: var(--ink-dim); font-weight: 500; }
   .card p { font-size: 15px; line-height: 1.65; color: #e6dcff; text-align: left; }
-  .card .controls { font-size: 14px; line-height: 1.8; color: #cfc2ee; text-align: left; columns: 2; }
-  .card .controls b { color: #ffd23d; }
-  button { pointer-events: auto; cursor: pointer; margin: 8px 6px 0; padding: 12px 28px; font-size: 17px; font-weight: 700; color: #14081f; background: linear-gradient(90deg, #ff3d9e, #ffb03d); border: none; border-radius: 999px; }
-  button.ghost { background: transparent; color: #ffd23d; border: 1px solid #ffd23d; }
+  .card p.center { text-align: center; }
+  .card p.fine { text-align: center; font-size: 13px; color: #9d8cc4; }
+  .missions { text-align: left; font-size: 14px; line-height: 1.7; color: #e6dcff; margin: 0 0 14px; padding: 10px 14px; border-left: 3px solid var(--neon-yellow); background: rgba(255, 210, 61, 0.06); }
+  .missions b { color: var(--neon-yellow); }
+  .missions .new { color: var(--neon-cyan); font-weight: 700; }
+  .card .controls { font-size: 14px; line-height: 1.8; color: #cfc2ee; text-align: left; columns: 2; column-gap: 28px; }
+  .card .controls b { color: var(--neon-yellow); }
+  button {
+    pointer-events: auto; cursor: pointer; margin: 8px 6px 0; padding: 12px 28px;
+    font-size: 17px; font-weight: 700; color: #14081f;
+    background: linear-gradient(90deg, var(--neon-pink), #ffb03d);
+    border: none; border-radius: 999px;
+  }
+  button:hover { filter: brightness(1.12); }
+  button.ghost { background: transparent; color: var(--neon-yellow); border: 1px solid var(--neon-yellow); }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>
@@ -43,8 +110,8 @@
 <canvas id="scene" aria-label="Neon Bay: open-world crime game"></canvas>
 <div id="hud">
   <div id="stats" class="panel">
-    <div class="row"><span>Uang</span><span class="money" id="money">$0</span></div>
-    <div class="row"><span>Misi</span><span id="missionCount">0 / 2</span></div>
+    <div class="row"><span class="label">Uang</span><span class="money" id="money">$0</span></div>
+    <div class="row"><span class="label">Misi</span><span id="missionCount">0 / 2</span></div>
     <div id="hpbar"><div id="hpfill"></div></div>
   </div>
   <div id="wanted" aria-label="wanted level"></div>
@@ -53,37 +120,44 @@
   <div id="hint"></div>
   <div id="toast"></div>
   <canvas id="minimap" width="190" height="190" aria-label="Minimap kota Neon Bay"></canvas>
-  <button id="btnMute" type="button">SUARA: ON</button>
+  <button id="btnMute" type="button" aria-label="Bisu atau nyalakan suara">SUARA: ON</button>
   <div id="crosshair"></div>
 </div>
 
 <div class="overlay" id="startScreen">
   <div class="card">
-    <h1>NEON BAY</h1>
+    <h1>NEON BAY <span style="font-size:22px; letter-spacing:3px; vertical-align:middle">v2</span></h1>
     <h2>OPEN-WORLD CRIME &middot; KOTA FIKSI &middot; SENJA NEON</h2>
     <p><b>Raka</b> baru bebas dan berutang pada <b>Madam Vex</b>, penguasa pelabuhan Neon Bay.
     Satu paket harus sampai sebelum tengah malam — dan polisi kota tidak pernah tidur.
     Curi mobil, kabur dari kejaran, selesaikan pekerjaan, dan jadilah legenda jalanan.</p>
+    <div class="missions">
+      <b>Misi 1 — Paket Neon:</b> ambil paket, antar ke tujuan. Bayaran $500.<br>
+      <b>Misi 2 — Kabur dari Polisi:</b> capai rumah aman sebelum waktu habis. Bayaran $800.<br>
+      <b>Misi 3 — Taksi Kilat:</b> <span class="new">BARU di v2</span> — antar penumpang secepat mungkin,
+      makin cepat sampai makin besar tipnya.<br>
+      <b>Kurir berulang:</b> pekerjaan antar paket tanpa henti di seluruh kota, $200 per paket.
+    </div>
     <div class="controls">
-      <div><b>WASD</b> gerak / mengemudi</div>
+      <div><b>WASD / Panah</b> gerak / mengemudi</div>
       <div><b>Mouse</b> putar kamera (klik untuk kunci)</div>
       <div><b>Shift</b> lari &nbsp; <b>Spasi</b> lompat</div>
       <div><b>E</b> masuk / keluar mobil</div>
-      <div><b>F / Klik</b> pukul</div>
+      <div><b>F / Klik kiri</b> pukul</div>
       <div><b>P / Esc</b> jeda &nbsp; <b>M</b> bisu</div>
     </div>
     <div>
       <button id="btnStart">MULAI</button>
       <button id="btnContinue" class="ghost" style="display:none">LANJUTKAN</button>
     </div>
-    <p style="text-align:center; font-size:13px; color:#9d8cc4">Kota, karakter, dan cerita 100% fiksi dan orisinal. Tanpa aset game komersial.</p>
+    <p class="fine">Kota, karakter, dan cerita 100% fiksi dan orisinal. Tanpa aset game komersial.</p>
   </div>
 </div>
 
 <div class="overlay" id="pauseScreen" style="display:none">
   <div class="card">
-    <h1 style="font-size:40px">JEDA</h1>
-    <p style="text-align:center">Neon Bay menunggu. Polisi tidak — tapi mereka juga ikut jeda.</p>
+    <h1 class="small">JEDA</h1>
+    <p class="center">Neon Bay menunggu. Polisi tidak — tapi mereka juga ikut jeda.</p>
     <button id="btnResume">LANJUT</button>
     <button id="btnRestart" class="ghost">MULAI ULANG</button>
   </div>
@@ -91,8 +165,8 @@
 
 <div class="overlay" id="overScreen" style="display:none">
   <div class="card">
-    <h1 style="font-size:40px">TERTANGKAP</h1>
-    <p style="text-align:center" id="overText">Raka kehabisan tenaga di jalanan Neon Bay.</p>
+    <h1 class="small">TERTANGKAP</h1>
+    <p class="center" id="overText">Raka kehabisan tenaga di jalanan Neon Bay.</p>
     <button id="btnAgain">COBA LAGI</button>
   </div>
 </div>
