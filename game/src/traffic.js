@@ -73,6 +73,7 @@ export function buildCarMesh(kind, paint) {
     stripe.position.set(0, 0.95, 0);
     group.add(stripe);
   }
+  group.traverse((child) => { if (child.isMesh) child.castShadow = true; });
   return group;
 }
 
