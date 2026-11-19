@@ -1,116 +1,123 @@
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/dayzdropeth-star/makefun-gta6-neonbay/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/dayzdropeth-star/makefun-gta6-neonbay/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+# NEON BAY — Open-World Driving di Kota Neon
 
-<sub>Entered on [make.fun](https://make.fun/?utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
+Entri untuk kompetisi **make.fun GTA 6 (gta6-01)**: game mengemudi
+open-world 3D original di kota fiksi **Neon Bay**. Dibangun dengan
+three.js (vendored) dan tanpa aset dari game komersial apa pun — semua
+nama, gedung, kendaraan, misi, dan suara dibuat dari nol untuk game ini.
 
-# NEON BAY v2 — Open-World Crime
-
-Game open-world crime orisinal berbasis three.js yang berjalan offline dari file statis di browser desktop. Kota fiksi **Neon Bay** di senja neon: jalan kaki dan mengemudi, traffic dan pejalan kaki, mencuri mobil, sistem wanted 5 bintang dengan kejaran polisi, misi cerita, combat jarak dekat, HUD + minimap, save progres, dan suara hasil sintesis WebAudio.
-
-**Raka** baru bebas dan berutang pada **Madam Vex**, penguasa pelabuhan Neon Bay. Satu paket harus sampai sebelum tengah malam — dan polisi kota tidak pernah tidur. Curi mobil, kabur dari kejaran, selesaikan pekerjaan, dan jadilah legenda jalanan.
-
-Yang baru di v2: misi cerita ketiga **Taksi Kilat** — antar penumpang secepat mungkin, makin cepat sampai makin besar tipnya — traffic yang lebih bervariasi, dan kamera mengemudi baru yang lebih jauh dan lebih tinggi supaya jalanan di depan mobil terlihat lebih lega.
-
-## Yang berubah di v2
-
-- **Misi 3 — Taksi Kilat (baru):** misi cerita ketiga, antar penumpang secepat mungkin dengan tip berbasis kecepatan.
-- **Traffic lebih bervariasi:** kecepatan dan warna mobil AI kini lebih beragam di tiap seed.
-- **Kamera mengemudi baru:** lebih jauh dan lebih tinggi dari kamera jalan kaki, dengan transisi halus saat masuk/keluar mobil.
-- **Layar judul dirapikan:** daftar misi kini tercantum lengkap (3 misi cerita + kurir berulang) beserta bayarannya.
+Kamu mulai di trotoar saat senja, di samping mobil magenta-mu. Ambil
+mobil, jelajahi kota, selesaikan misi cerita, dan jangan sampai polisi
+menangkapmu.
 
 ## Cara main
 
-Serve folder `game/` secara lokal, lalu buka di browser desktop:
+Buka `game/index.html` lewat server statis (lihat "Menjalankan" di bawah),
+lalu klik **MULAI JELAJAH** atau tekan Enter.
+
+| Tombol | Aksi |
+| ------ | ---- |
+| W / ↑ | Gas |
+| S / ↓ | Rem / mundur |
+| A D / ← → | Belok (jalan kaki: putar badan) |
+| Spasi | Rem tangan |
+| E | Naik mobil parkir · turun dari mobil · curi mobil yang sedang jalan |
+| H | Klakson |
+| M | Suara hidup/mati |
+| P / Esc | Jeda |
+| 1–4 | Mulai misi 1–3 / job Kurir Neon |
+| R | Kembali ke jalan setelah tertangkap |
+
+## Fitur
+
+- **Kota Neon Bay** — grid 5×5 avenue dengan gedung bertingkat, jendela
+  menyala, papan neon (RAMEN, ARCADE, KOPI, SINEMA, ...), lampu jalan,
+  lampu lalu lintas yang bersiklus, pepohonan, dan teluk di sisi selatan.
+- **Siklus siang-malam** — jam berjalan dari senja ke malam ke pagi;
+  warna langit, matahari, bulan, dan bintang berubah mengikuti jam.
+- **Cuaca** — Cerah, Berkabut, Hujan, dan Badai berganti sendiri. Hujan
+  membasahi jalan: grip turun, mobil lebih lambat dan mudah selip.
+- **Lalu lintas 3 jenis** — sedan, taksi kuning, dan truk/bus besar.
+  Kepadatan mengikuti jam: paling ramai saat jam sibuk (07–09 dan 17–19),
+  paling sepi tengah malam.
+- **Wanted 5 bintang** — mencuri mobil dan menabrak lalu lintas menaikkan
+  bintang. Polisi mengejar dengan sirene dan lampu berkedip; kalau mereka
+  menempel saat kamu pelan, kamu tertangkap dan kena denda. Sembunyi 30
+  detik untuk menurunkan satu bintang.
+- **3 misi cerita + job kurir** — Paket Kilat (antar paket tepat waktu),
+  Lolos dari Kejaran (bertahan 60 detik dari polisi), Taksi Kilat (jemput
+  penumpang dan antar secepatnya, bonus makin besar makin cepat), plus
+  Kurir Neon yang bisa diulang setelah misi cerita selesai.
+- **Jalan kaki & curi mobil** — turun dari mobil kapan saja; mobil parkir
+  gratis dinaiki, mobil yang sedang jalan bisa dicuri (wanted +1).
+- **HUD + minimap** — uang, bintang wanted, jam, cuaca, objektif misi
+  dengan timer, kecepatan, dan peta mini dengan posisi pemain, lalu
+  lintas, polisi, dan penanda misi.
+- **Audio prosedural** — suara mesin, klakson, sirene, tabrakan, dan
+  denting misi semuanya disintesis WebAudio; tanpa file suara.
+- **Seeded** — `?seed=N` membangun kota, lalu lintas, dan target misi
+  yang sama setiap kali.
+- **Simpan otomatis** — uang dan progres misi tersimpan di localStorage.
+
+## Mode screenshot
+
+Tiga adegan bisa dipentaskan secara deterministik untuk `screenshots/`:
+
+| Query | Adegan |
+| ----- | ------ |
+| `?shot=start&seed=1` | Layar judul di atas kota saat senja |
+| `?shot=play&seed=1` | Mengemudi dengan autopilot di jalanan |
+| `?shot=end&seed=1` | Misi 1 selesai, banner kemenangan tampil |
+
+Setiap adegan memainkan aturan game yang sesungguhnya dari dunia baru
+(dengan seed yang sama hasilnya sama), lalu menandai
+`window.__shotReady` saat frame selesai dilukis.
+
+## Menjalankan
 
 ```sh
+# Mainkan di browser:
 node serve.ts
-# buka http://localhost:8080
+# lalu buka http://localhost:8080
+
+# Hand-in (menyalin game/ + screenshots/ dan menulis dossier.json):
+mkdir -p /tmp/neonbay-out
+MAKEFUN_OUTPUT_DIR=/tmp/neonbay-out node main.ts
 ```
 
-Klik **MULAI** di layar judul. Selesaikan misi cerita secara berurutan, lalu pekerjaan kurir berulang tersedia di seluruh kota. Uang jalanan ($25) tersebar di trotoar — ambil dengan berjalan atau mengemudi melewatinya.
-
-**Seed deterministik:** `?seed=1` selalu membangun kota yang sama (gedung, mobil parkir, traffic, pejalan kaki) dan aliran misi yang sama — berguna untuk mengulang adegan yang sama persis. Seed lain membangun kota yang berbeda. Mode staging `?shot=start|play|end&seed=1` dipakai untuk mengambil screenshot.
-
-## Misi
-
-| Misi | Tugas | Bayaran |
-| --- | --- | --- |
-| **Misi 1 — Paket Neon** | Ambil paket di penanda kuning, antar ke tujuan berikutnya | $500 |
-| **Misi 2 — Kabur dari Polisi** | Polisi mengejar (wanted 3 bintang): capai rumah aman biru sebelum 90 detik habis | $800 |
-| **Misi 3 — Taksi Kilat** *(baru di v2)* | Antar penumpang secepat mungkin; makin cepat sampai, makin besar tipnya | Tip per kecepatan |
-| **Kurir berulang** | Setelah misi cerita selesai: ambil paket hijau, antar ke tujuan, ulangi terus | $200 per paket |
-
-Gagal di Misi 2 tidak mengakhiri permainan — Raka tetap bebas dan pekerjaan kurir dibuka beberapa detik kemudian. Penanda misi berupa pilar cahaya (kuning untuk paket, biru untuk rumah aman, hijau untuk kurir) dan berlian di minimap.
-
-## Kontrol
-
-| Input | Aksi |
-| --- | --- |
-| WASD / panah | Gerak / mengemudi (setir, gas, rem) |
-| Mouse | Putar kamera (klik canvas untuk pointer lock) |
-| Shift | Lari |
-| Spasi | Lompat |
-| E | Masuk / keluar mobil |
-| F / klik kiri | Pukul |
-| M / tombol SUARA | Bisu / nyalakan suara |
-| P / Esc | Jeda |
-
-## Sistem
-
-- **Kota prosedural 8×8 blok** — gedung dengan jendela menyala, papan neon, lampu jalan, marka jalan, dan penyeberangan.
-- **Lalu lintas & pejalan kaki** — mobil AI melaju di jalan dengan kecepatan dan warna yang bervariasi; pejalan kaki berjalan di trotoar dan kabur saat mobil melaju kencang.
-- **Mencuri mobil** — mobil parkir (+1 bintang) atau mobil traffic (+2 bintang) menaikkan wanted level. Mobil polisi tidak bisa dicuri.
-- **Wanted 1–5 bintang** — mobil polisi muncul dan mengejar; makin tinggi bintang, makin banyak dan cepat polisinya. Bersembunyi jauh dari polisi selama 6 detik untuk menurunkan satu bintang.
-- **Misi cerita** — 3 misi (antar paket, kabur dari polisi, Taksi Kilat) + pekerjaan kurir berulang, dengan beacon dan penanda di minimap.
-- **Combat** — pukulan jarak dekat; memukul atau menabrak pejalan kaki menaikkan wanted.
-- **Kamera mengemudi** — kamera mengikuti dari belakang mobil, lebih jauh dan lebih tinggi dibanding kamera jalan kaki, dengan transisi halus saat masuk/keluar mobil.
-- **HUD & minimap** — health, uang, bintang wanted, kecepatan, objektif misi, dan minimap top-down (pemain, mobil, polisi, penanda misi, uang jalanan).
-- **Save** — uang dan misi selesai tersimpan di `localStorage`; tombol **LANJUTKAN** memuat progres.
-- **Suara** — mesin, sirene, pickup, dan pukulan disintesis dengan WebAudio; tanpa file audio eksternal. Tombol **SUARA** di kanan bawah atau tombol **M** membisukan semuanya.
-
-## Performa
-
-Game menargetkan 60 fps di desktop dengan software rendering sekalipun: HUD di-refresh 10 Hz dan minimap 5 Hz (bukan tiap frame), material fasad gedung di-cache bersama (bukan satu material baru per gedung), lampu jalan memakai dua `InstancedMesh`, dan kamera memakai ulang satu vektor scratch alih-alih mengalokasi `Vector3` baru tiap frame.
+Jangan pernah menjalankan `main.ts` dengan `MAKEFUN_OUTPUT_DIR` menunjuk
+ke direktori repo ini sendiri — salinan akan menimpa sumbernya.
 
 ## Struktur
 
 ```
 game/
-  index.html            # HUD, layar judul/jeda/game-over, tombol suara
+  index.html            HUD, menu, overlay (judul/jeda/tertangkap/selesai)
+  vendor/three.min.js   three.js r160 (vendored)
   src/
-    main.js             # loop game, misi, wanted/polisi, mengemudi, combat
-    world.js            # kota prosedural 8x8, mobil, pejalan kaki, pickup
-    rng.js              # RNG ber-seed (mulberry32) + helper int/shuffle
-    audio.js            # synth WebAudio: mesin, sirene, jingle misi
-  vendor/three.min.js   # three.js r160 (vendored, tanpa CDN)
-main.ts                 # entry make.fun: salin game/ + screenshots/ ke /output
-screenshots/           # 3 screenshot asli dari headless Chromium (seed 1)
-serve.ts                # server statis lokal untuk pengembangan
+    main.js             boot, loop, fisika mobil, polisi, kamera, HUD, minimap
+    rng.js              RNG seeded (mulberry32 + helper)
+    sky.js              siklus siang-malam, cuaca, hujan, grip jalan
+    world.js            kota: jalan, gedung, neon, lampu, tabrakan
+    traffic.js          lalu lintas 3 jenis + jam sibuk
+    missions.js         3 misi cerita + job kurir berulang
+    audio.js            suara prosedural WebAudio
+main.ts                 program hand-in (menyalin game + screenshot, dossier)
+serve.ts                server statis untuk pengembangan
+shots.json              daftar screenshot
+screenshots/            1-start.jpg, 2-play.jpg, 3-end.jpg
 ```
 
-## Screenshot & validasi
+## Catatan teknis
 
-Screenshot diambil dari game yang sedang berjalan di headless Chromium dengan mode staging (`?shot=start|play|end&seed=1`, lihat `shots.json`), masing-masing JPEG ≤ 256 KiB. Sebelum submit, jalankan dari repo ini:
-
-```sh
-mkdir -p /tmp/gta6-out && MAKEFUN_OUTPUT_DIR=/tmp/gta6-out node main.ts   # harus exit 0
-node cli/makefun.mjs check --kit . --repo /path/to/repo   # dari direktori kit gta6-01
-```
-
-Jangan pernah menjalankan `main.ts` dengan output dir = direktori repo.
-
-`main.ts` deterministik: dua run dengan input yang sama menghasilkan byte yang identik di `/output` (urutan file diurutkan, `dossier.json` ditulis sebagai canonical JSON).
-
-## Teknologi
-
-- three.js r160 (vendored di `game/vendor/three.min.js`, tanpa CDN saat game berjalan)
-- JavaScript ES modules, tanpa build step
-- Semua aset dibuat prosedural di dalam kode — tanpa aset game komersial apa pun
-
-## Orisinalitas
-
-NEON BAY adalah karya orisinal: kota, karakter (Raka, Madam Vex), cerita, nama misi, dan semua model dibuat prosedural dari kode. Tidak ada aset, nama, merek, atau materi dari Rockstar Games, Grand Theft Auto, atau game komersial lain yang dipakai — termasuk di dalam kode, teks, maupun screenshot. three.js dipakai di bawah lisensi MIT-nya sebagai library, bukan sebagai aset game.
+- Game berjalan offline dari file statis: tidak ada network request,
+  semua yang dimuat berasal dari `game/` atau dibuat saat runtime
+  (tekstur jendela dan papan neon dilukis di canvas).
+- three.js r160 dimuat sebagai script klasik (`window.THREE`), lalu
+  `main.js` sebagai ES module.
+- Loop memakai fixed-step 1/60 detik; fisika mobil arcade dengan grip
+  yang dipengaruhi cuaca.
+- Semua angka (kecepatan, reward, timer) bisa diubah di masing-masing
+  modul tanpa menyentuh modul lain.
 
 ## Lisensi
 
