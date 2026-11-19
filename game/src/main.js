@@ -50,8 +50,12 @@ const hud = {
 const rng = createRng(seed);
 const audio = createAudio();
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x2a1c50);
@@ -59,7 +63,7 @@ const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerH
 camera.position.set(0, 40, 90);
 
 const sky = createSky(scene, rng.fork(11));
-const city = buildCity(scene, rng.fork(23));
+const city = buildCity(scene, rng.fork(23), renderer.capabilities.getMaxAnisotropy());
 const traffic = createTraffic(scene, city, rng.fork(37), () => sky.hour, () => ({ x: player.x, z: player.z }));
 const missions = createMissions(scene, city, rng.fork(53));
 traffic.seed(14);
@@ -111,6 +115,7 @@ const spoiler = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ color: 0x1a1a22, roughness: 0.4, metalness: 0.6 }),
 );
 spoiler.position.set(0, 1.15, -2.1);
+spoiler.castShadow = true;
 myCar.mesh.add(spoiler);
 const glowMat = new THREE.MeshBasicMaterial({ color: 0xff2d78, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
 const underglow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 4.6), glowMat);
@@ -122,10 +127,12 @@ const walker = new THREE.Group();
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffe14d, roughness: 0.8 });
 const walkerBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.85, 4, 10), bodyMat);
 walkerBody.position.y = 1.05;
+walkerBody.castShadow = true;
 walker.add(walkerBody);
 const walkerHead = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10),
   new THREE.MeshStandardMaterial({ color: 0xd8a075, roughness: 0.7 }));
 walkerHead.position.y = 1.95;
+walkerHead.castShadow = true;
 walker.add(walkerHead);
 walker.position.set(player.x, 0, player.z);
 scene.add(walker);
@@ -145,7 +152,7 @@ for (let index = 0; index < 6; index += 1) {
 }
 parked.push({ mesh: myCar.mesh, x: myCar.x, z: myCar.z, heading: myCar.heading, kind: 'sedan', mine: true });
 
-// Fake blob shadow under the player car (real shadows stay off for speed).
+// Fake blob shadow under the player car (backs up the real shadows at night).
 const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 });
 const blob = new THREE.Mesh(new THREE.PlaneGeometry(3, 5.2), blobMat);
 blob.rotation.x = -Math.PI / 2;
