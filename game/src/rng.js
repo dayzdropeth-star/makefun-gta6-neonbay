@@ -1,102 +1,106 @@
-// Seeded randomness for NEON BAY (mulberry32).
+// NEON BAY v3 — seeded random numbers.
 //
-// Every random draw in the game — city layout, traffic variety, mission
-// targets, pedestrian turns — comes from one of these streams, so a
-// `?seed=` URL always builds the same Neon Bay and replays the same
-// mission flow instead of depending on Math.random() noise.
-//
-// Two streams exist by convention:
-//   * build stream — created once in buildWorld(seed), shapes the city.
-//   * play stream  — created in main.js from (seed ^ 0x9e3779b9), drives
-//     everything that happens while the game runs (respawns, rush hour,
-//     aggressive-driver rolls).
-// Keep the streams separate: drawing from the build stream during play
-// would shift the city layout for later seeds.
+// Every random choice in the game (city layout, traffic spawns, mission
+// targets, weather changes) flows through one of these generators, so the
+// same ?seed= always builds the same city and the same traffic. The core is
+// mulberry32: small, fast, deterministic, and good enough for gameplay.
 
-// Core PRNG: mulberry32. Small, fast, and deterministic for a 32-bit seed.
-export function makeRng(seed) {
-  // Guard against NaN / Infinity / non-numeric seeds (e.g. "?seed=abc"):
-  // fall back to the default seed instead of producing a stream of NaN.
-  let state = Number.isFinite(seed) ? seed >>> 0 : 7;
-  return function next() {
-    state |= 0;
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// Uniform float in [min, max).
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
-}
-
-// Uniform integer in [min, max] inclusive.
-export function int(rng, min, max) {
-  return min + Math.floor(rng() * (max - min + 1));
-}
-
-// Random element of a non-empty list.
-export function pick(rng, list) {
-  return list[Math.floor(rng() * list.length)];
-}
-
-// True with probability p (0..1).
-export function chance(rng, p) {
-  return rng() < p;
-}
-
-// Weighted choice: entries are [value, weight] pairs; heavier entries win
-// more often. Total weight is computed from the entries themselves.
-// A zero total weight falls back to the last entry instead of NaN.
-export function weighted(rng, entries) {
-  let total = 0;
-  for (const [, weight] of entries) total += weight;
-  if (!(total > 0)) return entries[entries.length - 1][0];
-  let roll = rng() * total;
-  for (const [value, weight] of entries) {
-    roll -= weight;
-    if (roll <= 0) return value;
+/**
+ * Fold a short string into a 32-bit seed (FNV-1a). Lets a seed word such as
+ * "neon" behave like a number seed.
+ */
+export function hashSeed(text) {
+  let hash = 0x811c9dc5;
+  const word = String(text ?? '');
+  for (let index = 0; index < word.length; index += 1) {
+    hash ^= word.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
   }
-  return entries[entries.length - 1][0];
+  return hash >>> 0;
 }
 
-// Hash an arbitrary string (e.g. a player name) into a stable 32-bit seed
-// via FNV-1a, so makeRng(hashSeed(name)) replays the same world for it.
-export function hashSeed(str) {
-  let h = 0x811c9dc5;
-  const s = String(str);
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
+/** Parse a seed from a query value: a number stays a number, a word is hashed. */
+export function seedFromParam(raw, fallback) {
+  if (raw === null || raw === undefined || raw === '') return fallback >>> 0;
+  const asNumber = Number.parseInt(raw, 10);
+  if (Number.isInteger(asNumber)) return asNumber >>> 0;
+  return hashSeed(raw);
+}
+
+/**
+ * Build a generator from a 32-bit seed. The returned object is the only
+ * random source a system needs: next() for a float in [0, 1), plus the
+ * helpers games reach for most.
+ */
+export function createRng(seed) {
+  let state = (seed >>> 0) || 0x9e3779b9;
+  let spare = null;
+
+  function next() {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   }
-  return h >>> 0;
-}
 
-// Approximately standard-normal float (Box–Muller), clamped to [-2.5, 2.5].
-// Handy for natural-looking variation — speeds, lane drift, spawn offsets —
-// that clusters around a mean instead of spreading uniformly.
-export function gauss(rng) {
-  const u = Math.max(rng(), 1e-9);
-  const v = rng();
-  const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  return Math.max(-2.5, Math.min(2.5, z));
-}
-
-// Base value plus a symmetric random offset of at most `spread`.
-export function jitter(rng, base, spread) {
-  return base + (rng() * 2 - 1) * spread;
-}
-
-// Fisher–Yates shuffle that returns a new array, leaving the input untouched.
-export function shuffle(rng, list) {
-  const out = list.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = out[i];
-    out[i] = out[j];
-    out[j] = tmp;
+  function range(min, max) {
+    return min + (max - min) * next();
   }
-  return out;
+
+  function int(min, max) {
+    return Math.floor(range(min, max + 1));
+  }
+
+  function pick(list) {
+    if (!list || list.length === 0) return undefined;
+    return list[Math.floor(next() * list.length)];
+  }
+
+  function chance(probability) {
+    return next() < probability;
+  }
+
+  function sign() {
+    return next() < 0.5 ? -1 : 1;
+  }
+
+  /** Approximately normal in [-3, 3], mean 0 (Box-Muller, one spare kept). */
+  function gauss() {
+    if (spare !== null) {
+      const value = spare;
+      spare = null;
+      return value;
+    }
+    let u = 0;
+    let v = 0;
+    let radius = 0;
+    do {
+      u = next() * 2 - 1;
+      v = next() * 2 - 1;
+      radius = u * u + v * v;
+    } while (radius >= 1 || radius === 0);
+    const scale = Math.sqrt((-2 * Math.log(radius)) / radius);
+    spare = v * scale;
+    return u * scale;
+  }
+
+  /** A shuffled copy; the input list is never reordered in place. */
+  function shuffle(list) {
+    const copy = list.slice();
+    for (let index = copy.length - 1; index > 0; index -= 1) {
+      const other = Math.floor(next() * (index + 1));
+      const temp = copy[index];
+      copy[index] = copy[other];
+      copy[other] = temp;
+    }
+    return copy;
+  }
+
+  /** A fresh generator continuing from a child seed, for one subsystem. */
+  function fork(salt) {
+    return createRng((state ^ Math.imul(salt >>> 0, 0x85ebca6b)) >>> 0);
+  }
+
+  return { next, range, int, pick, chance, sign, gauss, shuffle, fork };
 }

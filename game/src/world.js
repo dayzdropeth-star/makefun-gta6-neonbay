@@ -1,484 +1,388 @@
-// Neon Bay's city: an 8x8 block grid built procedurally from a seeded RNG.
-// Everything here is original geometry + canvas textures; no external assets.
+// NEON BAY v3 — the city.
 //
-// The world owns the static city (buildings, ground, streetlights) and the
-// spawn state for everything that moves: parked cars, traffic cars,
-// pedestrians, and street-cash pickups. The game loop in main.js moves
-// traffic and pedestrians each frame; this module only builds them.
-import { makeRng, range, pick, chance, weighted } from './rng.js';
+// A procedural neon city on a grid: five avenues cross five streets, blocks
+// of towers rise between them, and the bay glitters to the south. Everything
+// is generated from the run's seed — the same seed always builds the same
+// skyline — and every texture is painted at runtime on a canvas, so the
+// game loads no image, font or sound from anywhere.
+//
+// The module also owns the city's collision: buildings are axis-aligned
+// boxes, and anything round (a car, a pedestrian) asks resolveCircle() to
+// be pushed out of them.
 
-export const BLOCK = 44; // building block size
-export const STREET = 14; // street width
-export const PITCH = BLOCK + STREET; // 58
-export const GRID = 8; // blocks per side
-export const HALF = (GRID * BLOCK + (GRID + 1) * STREET) / 2; // 239
+export const PITCH = 60;
+export const BLOCK = 46;
+export const ROAD = 14;
+export const GRID = 5;
+export const HALF = 150;
 
-// Traffic vehicle classes. Each kind differs in size, cruise speed and
-// collision radius, so a truck reads — and drives — differently from a
-// sedan or a cab. `weave` is how far an aggressive driver of this kind
-// drifts across lanes; trucks barely change lanes, cabs weave the most.
-// Weights are used by the seeded spawn roll.
-export const TRAFFIC_KINDS = {
-  sedan: { weight: 6, length: 4.4, width: 2.0, topSpeed: [8, 12.5], radius: 2.4, weave: 5.5 },
-  taxi: { weight: 3, length: 4.4, width: 2.0, topSpeed: [10, 14.5], radius: 2.4, weave: 5.5 },
-  truck: { weight: 2, length: 6.2, width: 2.3, topSpeed: [5.5, 8.5], radius: 3.2, weave: 1.5 },
-};
+const NEON_WORDS = ['NEON', 'BAY 24', 'RAMEN', 'TAXI', 'HOTEL', 'ARCADE', 'KOPI', 'DISKO', 'MIE AYAM', 'BAR', 'SINEMA', 'MOTEL', 'SATE', 'KARAOKE'];
+const NEON_COLORS = ['#ff2d78', '#00e5ff', '#ffe14d', '#7cff5e', '#ff8a3d', '#c77dff'];
+const TOWER_COLORS = [0x2a3040, 0x35324a, 0x2e3a44, 0x40342e, 0x2c2f38, 0x3a2f42];
 
-// How many traffic cars the city spawns. The game loop varies how many of
-// them are actually on the road (rush hour), but the pool itself is fixed
-// so a seed always builds the same fleet.
-export const TRAFFIC_COUNT = 14;
-
-export function streetCenters() {
-  const list = [];
-  for (let i = 0; i <= GRID; i++) list.push(-HALF + STREET / 2 + i * PITCH);
-  return list;
-}
-
-// --- Canvas textures -------------------------------------------------------
-
-function makeWindowTexture(rng) {
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 128;
-  const g = c.getContext('2d');
-  g.fillStyle = '#14101f';
-  g.fillRect(0, 0, 64, 128);
-  for (let y = 6; y < 122; y += 12) {
-    for (let x = 6; x < 58; x += 10) {
-      const lit = rng();
-      if (lit < 0.42) g.fillStyle = pick(rng, ['#ffd76a', '#7fe7ff', '#ff9ad5', '#ffe9a8']);
-      else if (lit < 0.55) g.fillStyle = '#3a2f55';
-      else g.fillStyle = '#0d0a18';
-      g.fillRect(x, y, 7, 8);
+/** Paint a windows texture: dark glass with a random scatter of lit rooms. */
+function windowsTexture(rng, litRatio) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#05070c';
+  ctx.fillRect(0, 0, 64, 128);
+  const warm = ['#ffd28a', '#ffe9b8', '#ffb36b'];
+  const cool = ['#9fd8ff', '#c9f2ff', '#7cc7ff'];
+  for (let row = 0; row < 16; row += 1) {
+    for (let col = 0; col < 8; col += 1) {
+      if (!rng.chance(litRatio)) continue;
+      ctx.fillStyle = rng.chance(0.65) ? rng.pick(warm) : rng.pick(cool);
+      ctx.fillRect(3 + col * 7.5, 4 + row * 7.5, 5, 4.5);
     }
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
-function makeGroundTexture() {
-  const size = 1024;
-  const c = document.createElement('canvas');
-  c.width = size;
-  c.height = size;
-  const g = c.getContext('2d');
-  const scale = size / (HALF * 2);
-  const toPx = (v) => (v + HALF) * scale;
-  g.fillStyle = '#1c1a24'; // asphalt base
-  g.fillRect(0, 0, size, size);
-  // Sidewalk slabs (lighter squares around each block).
-  g.fillStyle = '#33304a';
-  for (let bx = 0; bx < GRID; bx++) {
-    for (let bz = 0; bz < GRID; bz++) {
-      const x0 = -HALF + STREET + bx * PITCH;
-      const z0 = -HALF + STREET + bz * PITCH;
-      g.fillRect(toPx(x0 - 2), toPx(z0 - 2), (BLOCK + 4) * scale, (BLOCK + 4) * scale);
-    }
-  }
-  // Road centre dashes.
-  g.fillStyle = '#8f8a5a';
-  const streets = streetCenters();
-  for (const s of streets) {
-    for (let v = -HALF + 6; v < HALF - 6; v += 16) {
-      g.fillRect(toPx(v), toPx(s - 0.5), 8 * scale, 1 * scale);
-      g.fillRect(toPx(s - 0.5), toPx(v), 1 * scale, 8 * scale);
-    }
-  }
-  // Crosswalk stripes at intersections.
-  g.fillStyle = 'rgba(220, 220, 235, 0.5)';
-  for (const sx of streets) {
-    for (const sz of streets) {
-      for (let k = -5; k <= 5; k += 2.5) {
-        g.fillRect(toPx(sx + k - 0.7), toPx(sz - STREET / 2 + 1), 1.4 * scale, 4 * scale);
-        g.fillRect(toPx(sx + k - 0.7), toPx(sz + STREET / 2 - 5), 1.4 * scale, 4 * scale);
-      }
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
+/** Paint a glowing shop sign with one word on it. */
+function neonTexture(word, colour) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 256, 64);
+  ctx.font = 'bold 40px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = colour;
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = colour;
+  ctx.fillText(word, 128, 34);
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(word, 128, 34);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
-// --- Vehicle meshes --------------------------------------------------------
-
-// kind: 'sedan' (default), 'taxi' (yellow cab + roof sign), 'truck'
-// (longer, taller, bigger wheels). Police cars are sedans with a light
-// bar and a white stripe. `color` is ignored for taxis — cabs are yellow.
-export function makeCarMesh(color, police, kind) {
-  const spec = TRAFFIC_KINDS[kind] || TRAFFIC_KINDS.sedan;
-  const isTruck = kind === 'truck';
-  const isTaxi = kind === 'taxi';
-  const group = new THREE.Group();
-  const paint = new THREE.MeshStandardMaterial({
-    color: isTaxi ? 0xf2c200 : color,
-    metalness: 0.55,
-    roughness: 0.35,
-  });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x0e1a26, metalness: 0.7, roughness: 0.15 });
-  const len = spec.length;
-  const bodyH = isTruck ? 0.95 : 0.62;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(spec.width, bodyH, len), paint);
-  body.position.y = isTruck ? 0.72 : 0.55;
-  group.add(body);
-  const cabin = new THREE.Mesh(
-    new THREE.BoxGeometry(isTruck ? 2.0 : 1.75, isTruck ? 0.85 : 0.58, isTruck ? 2.0 : 2.2),
-    isTruck ? paint : glass,
-  );
-  cabin.position.set(0, isTruck ? 1.6 : 1.12, isTruck ? 0.9 : -0.25);
-  group.add(cabin);
-  const wheelR = isTruck ? 0.44 : 0.36;
-  const wheelGeo = new THREE.CylinderGeometry(wheelR, wheelR, 0.28, 10);
-  wheelGeo.rotateZ(Math.PI / 2);
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.9 });
-  const wz = len / 2 - 0.75;
-  const wx = spec.width / 2 - 0.05;
-  for (const [x, z] of [
-    [-wx, wz],
-    [wx, wz],
-    [-wx, -wz],
-    [wx, -wz],
-  ]) {
-    const w = new THREE.Mesh(wheelGeo, wheelMat);
-    w.position.set(x, wheelR, z);
-    group.add(w);
-  }
-  const lightMat = new THREE.MeshStandardMaterial({
-    color: 0xfff6c0,
-    emissive: 0xffe9a0,
-    emissiveIntensity: 1.6,
-  });
-  const headBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 0.08), lightMat);
-  headBar.position.set(0, 0.62, len / 2 + 0.02);
-  group.add(headBar);
-  const tailMat = new THREE.MeshStandardMaterial({
-    color: 0x550000,
-    emissive: 0xff2020,
-    emissiveIntensity: 1.2,
-  });
-  const tailBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 0.08), tailMat);
-  tailBar.position.set(0, 0.62, -len / 2 - 0.02);
-  group.add(tailBar);
-  if (isTaxi) {
-    // Roof sign so cabs read instantly at a distance.
-    const sign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.22, 0.4),
-      new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffd23d, emissiveIntensity: 1.2 }),
-    );
-    sign.position.set(0, 1.55, -0.25);
-    sign.name = 'taxisign';
-    group.add(sign);
-  }
-  if (police) {
-    const bar = new THREE.Mesh(
-      new THREE.BoxGeometry(1.1, 0.18, 0.4),
-      new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x2244ff, emissiveIntensity: 1.4 }),
-    );
-    bar.position.set(0, 1.5, -0.25);
-    bar.name = 'lightbar';
-    group.add(bar);
-    const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(2.02, 0.2, 4.42),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x888888, emissiveIntensity: 0.25 }),
-    );
-    stripe.position.y = 0.72;
-    group.add(stripe);
-  }
-  group.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
-  });
-  return group;
+function box(w, h, d, material) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
 }
 
-// Roll a traffic kind from the seeded stream, weighted toward sedans.
-function rollTrafficKind(rng) {
-  const entries = Object.entries(TRAFFIC_KINDS).map(([name, spec]) => [name, spec.weight]);
-  return weighted(rng, entries);
-}
+/**
+ * Build the whole city into `scene` and return the city's query object:
+ * collision, road tests, spawn points and the per-frame update for blinking
+ * signs and traffic lights.
+ */
+export function buildCity(scene, rng) {
+  const buildings = [];
+  const signs = [];
+  const intersections = [];
+  const trafficLights = [];
 
-// --- City construction -----------------------------------------------------
-
-export function buildWorld(scene, seed) {
-  const rng = makeRng(seed);
-  const world = {
-    buildingBoxes: [], // {minX,maxX,minZ,maxZ}
-    parkedCars: [],
-    trafficCars: [],
-    pedestrians: [],
-    pickups: [],
-    streetlights: [],
-    streets: streetCenters(),
-    bounds: HALF,
-  };
-
-  // Sky: dusk gradient dome + fog.
-  scene.background = new THREE.Color(0x1a0f2e);
-  scene.fog = new THREE.Fog(0x1a0f2e, 90, 420);
-  const hemi = new THREE.HemisphereLight(0x8a6fd8, 0x1a1426, 0.95);
-  scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xff9a5c, 1.35);
-  sun.position.set(-120, 90, 60);
-  scene.add(sun);
-  const moon = new THREE.DirectionalLight(0x7a86ff, 0.35);
-  moon.position.set(80, 120, -90);
-  scene.add(moon);
-
-  // Ground with painted roads.
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(HALF * 2 + 40, HALF * 2 + 40),
-    new THREE.MeshStandardMaterial({ map: makeGroundTexture(), roughness: 0.95 }),
-  );
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x141821, roughness: 1 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(680, 680), groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
+  ground.position.y = -0.08;
   scene.add(ground);
 
-  // Buildings, one or two per block, with neon signs on some.
-  // Facade materials are cached by (window map, tint, emissive map): the
-  // city reuses a handful of materials instead of minting a new one per
-  // building (~91 buildings), which cuts material/program churn.
-  const winTexes = [makeWindowTexture(rng), makeWindowTexture(rng), makeWindowTexture(rng)];
-  const facadeTints = [0xffffff, 0xd8c8ff, 0xffe0c8, 0xc8e8ff];
-  const facadeMats = new Map();
-  function pickFacadeMaterial() {
-    const mapIdx = Math.floor(rng() * winTexes.length);
-    const tint = pick(rng, facadeTints);
-    const emisIdx = Math.floor(rng() * winTexes.length);
-    const key = mapIdx + '|' + tint + '|' + emisIdx;
-    let mat = facadeMats.get(key);
-    if (!mat) {
-      mat = new THREE.MeshStandardMaterial({
-        map: winTexes[mapIdx],
-        color: tint,
-        roughness: 0.85,
-        emissive: 0xffffff,
-        emissiveMap: winTexes[emisIdx],
-        emissiveIntensity: 0.55,
-      });
-      facadeMats.set(key, mat);
-    }
-    return mat;
+  // The bay: open water south of the city, catching the neon.
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x0a2e4a, roughness: 0.25, metalness: 0.55, emissive: 0x061e33, emissiveIntensity: 0.6 });
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(680, 220), waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(0, -0.05, 268);
+  scene.add(water);
+
+  const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x2b303c, roughness: 0.9, emissive: 0x0a0d14, emissiveIntensity: 0.7 });
+  const walkMat = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 1 });
+  const roadLines = [];
+  // Roads run halfway between block centres: six avenues and six streets,
+  // so no tower ever stands on asphalt.
+  for (let index = -3; index <= 2; index += 1) {
+    const line = index * PITCH + PITCH / 2;
+    const roadX = new THREE.Mesh(new THREE.PlaneGeometry(ROAD, HALF * 2 + ROAD), asphaltMat);
+    roadX.rotation.x = -Math.PI / 2;
+    roadX.position.set(line, 0.02, 0);
+    scene.add(roadX);
+    const roadZ = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + ROAD, ROAD), asphaltMat);
+    roadZ.rotation.x = -Math.PI / 2;
+    roadZ.position.set(0, 0.02, line);
+    scene.add(roadZ);
+    roadLines.push(line);
   }
-  // Roof caps share one material per roof colour, also cached.
-  const roofColors = [0x241a33, 0x1c2438, 0x2c1a24, 0x18242c];
-  const roofMats = new Map();
-  function pickRoofMaterial() {
-    const color = pick(rng, roofColors);
-    let mat = roofMats.get(color);
-    if (!mat) {
-      mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
-      roofMats.set(color, mat);
+
+  // Sidewalk slabs: one per block, so the towers sit on pavement, not grass.
+  for (let bx = -2; bx <= 2; bx += 1) {
+    for (let bz = -2; bz <= 2; bz += 1) {
+      const slab = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK), walkMat);
+      slab.rotation.x = -Math.PI / 2;
+      slab.position.set(bx * PITCH, 0.015, bz * PITCH);
+      scene.add(slab);
     }
-    return mat;
   }
-  const neonColors = [0xff2e88, 0x00e5ff, 0xffb020, 0x7dff5e, 0xb46bff];
-  for (let bx = 0; bx < GRID; bx++) {
-    for (let bz = 0; bz < GRID; bz++) {
-      const cx = -HALF + STREET + BLOCK / 2 + bx * PITCH;
-      const cz = -HALF + STREET + BLOCK / 2 + bz * PITCH;
-      const twin = chance(rng, 0.45);
-      const spots = twin
-        ? [
-            [cx - BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4],
-            [cx + BLOCK / 4, cz, BLOCK / 2 - 3, BLOCK - 4],
-          ]
-        : [[cx, cz, BLOCK - 4, BLOCK - 4]];
-      for (const [x, z, w, d] of spots) {
-        const h = range(rng, 9, 42);
-        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), pickFacadeMaterial());
-        b.position.set(x, h / 2, z);
-        b.receiveShadow = true;
-        scene.add(b);
-        world.buildingBoxes.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
-        // Flat roof cap in one of the rooftop colours, so the skyline reads
-        // from above (and the roof palette actually gets used).
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.5, d + 0.6), pickRoofMaterial());
-        roof.position.set(x, h + 0.25, z);
+
+  // Lane dashes and crosswalk stripes, all in one instanced mesh.
+  const dashGeo = new THREE.PlaneGeometry(0.5, 3);
+  const dashMat = new THREE.MeshBasicMaterial({ color: 0xd8d2a8 });
+  const dashMatrices = [];
+  const dummy = new THREE.Object3D();
+  for (const line of roadLines) {
+    for (let along = -HALF + 6; along <= HALF - 6; along += 8) {
+      const nearCross = Math.abs(((along % PITCH) + PITCH) % PITCH) < 9 || Math.abs(((along % PITCH) + PITCH) % PITCH - PITCH) < 9;
+      if (nearCross) continue;
+      dummy.position.set(line, 0.04, along);
+      dummy.rotation.set(-Math.PI / 2, 0, 0);
+      dummy.updateMatrix();
+      dashMatrices.push(dummy.matrix.clone());
+      dummy.position.set(along, 0.04, line);
+      dummy.rotation.set(-Math.PI / 2, 0, 0);
+      dummy.updateMatrix();
+      dashMatrices.push(dummy.matrix.clone());
+    }
+  }
+  const dashes = new THREE.InstancedMesh(dashGeo, dashMat, Math.max(dashMatrices.length, 1));
+  dashMatrices.forEach((matrix, index) => dashes.setMatrixAt(index, matrix));
+  dashes.count = dashMatrices.length;
+  scene.add(dashes);
+
+  // Towers: each block holds one to four lots; height grows toward downtown.
+  const windowSets = [windowsTexture(rng, 0.42), windowsTexture(rng, 0.3), windowsTexture(rng, 0.55)];
+  const towerMats = TOWER_COLORS.map(
+    (color, index) => new THREE.MeshStandardMaterial({
+      color, roughness: 0.85, metalness: 0.15,
+      emissiveMap: windowSets[index % windowSets.length],
+      emissive: 0xffffff, emissiveIntensity: 1.15,
+    }),
+  );
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x14161d, roughness: 1 });
+  const antennaMat = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.6, metalness: 0.7 });
+
+  for (let bx = -2; bx <= 2; bx += 1) {
+    for (let bz = -2; bz <= 2; bz += 1) {
+      const centreX = bx * PITCH;
+      const centreZ = bz * PITCH;
+      const downtown = 1 - (Math.abs(bx) + Math.abs(bz)) / 4;
+      const lots = rng.int(2, 4);
+      const taken = rng.shuffle([0, 1, 2, 3]).slice(0, lots);
+      for (const lot of taken) {
+        const lotX = centreX + (lot % 2 === 0 ? -11 : 11);
+        const lotZ = centreZ + (lot < 2 ? -11 : 11);
+        const width = rng.range(15, 20);
+        const depth = rng.range(15, 20);
+        const height = rng.range(12, 20) + downtown * rng.range(8, 38);
+        const material = rng.pick(towerMats);
+        const tower = box(width, height, depth, material);
+        tower.position.set(lotX, height / 2, lotZ);
+        scene.add(tower);
+        const roof = box(width + 0.6, 0.8, depth + 0.6, roofMat);
+        roof.position.set(lotX, height + 0.4, lotZ);
         scene.add(roof);
-        // Neon sign strip on taller buildings.
-        if (h > 20 && chance(rng, 0.55)) {
-          const col = pick(rng, neonColors);
-          const sign = new THREE.Mesh(
-            new THREE.BoxGeometry(Math.min(w, 10), 1.1, 0.25),
-            new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 2.2 }),
-          );
-          sign.position.set(x, h * range(rng, 0.55, 0.85), z + d / 2 + 0.2);
+        if (rng.chance(0.4)) {
+          const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, rng.range(4, 9), 6), antennaMat);
+          antenna.position.set(lotX + rng.range(-4, 4), height + 3, lotZ + rng.range(-4, 4));
+          scene.add(antenna);
+        }
+        buildings.push({ minX: lotX - width / 2, maxX: lotX + width / 2, minZ: lotZ - depth / 2, maxZ: lotZ + depth / 2, height });
+
+        // A glowing shop sign on the street face of some towers.
+        if (rng.chance(0.42)) {
+          const word = rng.pick(NEON_WORDS);
+          const colour = rng.pick(NEON_COLORS);
+          const signMat = new THREE.MeshBasicMaterial({
+            map: neonTexture(word, colour), transparent: true, side: THREE.DoubleSide, toneMapped: false,
+          });
+          const sign = new THREE.Mesh(new THREE.PlaneGeometry(13, 3.2), signMat);
+          const face = rng.pick(['north', 'south', 'east', 'west']);
+          const signY = rng.range(4.5, Math.min(height - 2, 12));
+          if (face === 'north') { sign.position.set(lotX, signY, lotZ - depth / 2 - 0.3); sign.rotation.y = Math.PI; }
+          if (face === 'south') { sign.position.set(lotX, signY, lotZ + depth / 2 + 0.3); }
+          if (face === 'east') { sign.position.set(lotX + width / 2 + 0.3, signY, lotZ); sign.rotation.y = Math.PI / 2; }
+          if (face === 'west') { sign.position.set(lotX - width / 2 - 0.3, signY, lotZ); sign.rotation.y = -Math.PI / 2; }
           scene.add(sign);
+          signs.push({ material: signMat, phase: rng.range(0, Math.PI * 2), speed: rng.range(1.5, 4) });
         }
       }
     }
   }
 
-  // Streetlights along the streets, as two instanced meshes (one draw call each).
-  const poleGeo = new THREE.CylinderGeometry(0.12, 0.16, 6.4, 6);
-  const lampGeo = new THREE.SphereGeometry(0.42, 8, 6);
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0x22222c, roughness: 0.7, metalness: 0.5 });
-  const lampMat = new THREE.MeshStandardMaterial({
-    color: 0xffe9a0,
-    emissive: 0xffe9a0,
-    emissiveIntensity: 2.0,
-  });
-  const spots = [];
-  for (const s of world.streets) {
-    for (let v = -HALF + 20; v < HALF - 10; v += 58) {
-      if (Math.abs(s) <= HALF && Math.abs(v) <= HALF) spots.push([s + 5.4, v]);
+  // Street lamps at every intersection corner, one instanced set.
+  const poleGeo = new THREE.CylinderGeometry(0.09, 0.13, 7, 6);
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x2c313c, roughness: 0.7, metalness: 0.5 });
+  const headGeo = new THREE.SphereGeometry(0.42, 8, 6);
+  const headMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
+  const lampSpots = [];
+  for (let ix = -3; ix <= 2; ix += 1) {
+    for (let iz = -3; iz <= 2; iz += 1) {
+      const junctionX = ix * PITCH + PITCH / 2;
+      const junctionZ = iz * PITCH + PITCH / 2;
+      intersections.push({ x: junctionX, z: junctionZ });
+      lampSpots.push({ x: junctionX + 9, z: junctionZ + 9 });
+      lampSpots.push({ x: junctionX - 9, z: junctionZ - 9 });
     }
   }
-  const poles = new THREE.InstancedMesh(poleGeo, poleMat, spots.length);
-  const lamps = new THREE.InstancedMesh(lampGeo, lampMat, spots.length);
-  const m4 = new THREE.Matrix4();
-  spots.forEach(([x, z], i) => {
-    m4.makeTranslation(x, 3.2, z);
-    poles.setMatrixAt(i, m4);
-    m4.makeTranslation(x, 6.5, z);
-    lamps.setMatrixAt(i, m4);
+  const poles = new THREE.InstancedMesh(poleGeo, poleMat, lampSpots.length);
+  const heads = new THREE.InstancedMesh(headGeo, headMat, lampSpots.length);
+  lampSpots.forEach((spot, index) => {
+    dummy.position.set(spot.x, 3.5, spot.z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.updateMatrix();
+    poles.setMatrixAt(index, dummy.matrix);
+    dummy.position.set(spot.x, 7.1, spot.z);
+    dummy.updateMatrix();
+    heads.setMatrixAt(index, dummy.matrix);
   });
   scene.add(poles);
-  scene.add(lamps);
-  world.streetlights = [lamps];
+  scene.add(heads);
 
-  // Parked cars along street edges — a mix of sedans, cabs and one truck.
-  const carColors = [0xd83a3a, 0x3a7dd8, 0x38b24a, 0xd8b23a, 0x8a4fd8, 0xd8d8d8, 0x2c2c34, 0xff7a3d];
-  for (let i = 0; i < 16; i++) {
-    const horizontal = chance(rng, 0.5);
-    const s = pick(rng, world.streets);
-    const v = range(rng, -HALF + 24, HALF - 24);
-    const kind = rollTrafficKind(rng);
-    const mesh = makeCarMesh(pick(rng, carColors), false, kind);
-    if (horizontal) {
-      mesh.position.set(v, 0, s + 4.6);
-      mesh.rotation.y = chance(rng, 0.5) ? 0 : Math.PI;
-    } else {
-      mesh.position.set(s + 4.6, 0, v);
-      mesh.rotation.y = chance(rng, 0.5) ? Math.PI / 2 : -Math.PI / 2;
+  // A few palm-ish trees on block corners, for a coastal-city feel.
+  const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 5.5, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3524, roughness: 1 });
+  const leafGeo = new THREE.IcosahedronGeometry(2.2, 0);
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x1e6b34, roughness: 1, emissive: 0x0a2a12, emissiveIntensity: 0.5 });
+  for (let count = 0; count < 34; count += 1) {
+    const bx = rng.int(-2, 2);
+    const bz = rng.int(-2, 2);
+    const x = bx * PITCH + rng.pick([-20, 20]);
+    const z = bz * PITCH + rng.pick([-20, 20]);
+    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+    trunk.position.set(x, 2.75, z);
+    scene.add(trunk);
+    const leaves = new THREE.Mesh(leafGeo, leafMat);
+    leaves.position.set(x, 6.4, z);
+    leaves.scale.y = 0.75;
+    scene.add(leaves);
+  }
+
+  // Traffic lights on the nine central intersections, cycling on a timer.
+  const lightPoleMat = new THREE.MeshStandardMaterial({ color: 0x22262e, roughness: 0.7, metalness: 0.4 });
+  const bulbGeo = new THREE.SphereGeometry(0.32, 8, 6);
+  for (const lx of [-PITCH / 2, PITCH / 2, PITCH * 1.5]) {
+    for (const lz of [-PITCH / 2, PITCH / 2, PITCH * 1.5]) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 6.4, 6), lightPoleMat);
+      pole.position.set(lx + 8.4, 3.2, lz + 8.4);
+      scene.add(pole);
+      const bulbs = ['red', 'amber', 'green'].map((name, order) => {
+        const bulb = new THREE.Mesh(bulbGeo, new THREE.MeshBasicMaterial({ color: 0x331111 }));
+        bulb.position.set(lx + 8.4, 6.6 - order * 0.75, lz + 8.4);
+        scene.add(bulb);
+        return { mesh: bulb, name };
+      });
+      trafficLights.push({ x: lx, z: lz, bulbs });
     }
-    scene.add(mesh);
-    world.parkedCars.push({
-      mesh,
-      x: mesh.position.x,
-      z: mesh.position.z,
-      angle: mesh.rotation.y,
-      kind,
-      taken: false,
-    });
   }
 
-  // Traffic cars cruising the streets. Each one rolls a kind (sedan / taxi
-  // / truck), a cruise speed inside its kind's band, and an "aggressive"
-  // flag: aggressive drivers weave between lanes and surge their speed,
-  // calm ones hold a steady lane and speed. All rolls are seeded, so a
-  // seed always builds the same fleet with the same temperaments.
-  for (let i = 0; i < TRAFFIC_COUNT; i++) {
-    const kind = rollTrafficKind(rng);
-    const spec = TRAFFIC_KINDS[kind];
-    const mesh = makeCarMesh(pick(rng, carColors), false, kind);
-    scene.add(mesh);
-    const car = {
-      mesh,
-      kind,
-      // Collision radius used when the player bumps into this car.
-      radius: spec.radius,
-      // Cruise speed: the top of the kind's band; the game loop scales it
-      // down in rush hour and varies it for aggressive drivers.
-      topSpeed: range(rng, spec.topSpeed[0], spec.topSpeed[1]),
-      speed: 0,
-      horizontal: chance(rng, 0.5),
-      dir: chance(rng, 0.5) ? 1 : -1,
-      street: pick(rng, world.streets),
-      pos: range(rng, -HALF + 20, HALF - 20),
-      // Lane offset from the street centre line; aggressive drivers drift
-      // it around, calm drivers sit near their home lane. `weave` caps how
-      // far this kind of vehicle ever drifts (trucks stay put).
-      laneOffset: 0,
-      laneTarget: 0,
-      laneTimer: range(rng, 2, 6),
-      weave: spec.weave,
-      aggressive: chance(rng, 0.3),
-      // Phase for the speed-surge sine wave (aggressive drivers only).
-      surgePhase: range(rng, 0, Math.PI * 2),
-      // Rush hour: only the first N cars are on the road at any time;
-      // the rest wait off-street. main.js flips this flag.
-      active: true,
-      stolen: false,
-    };
-    car.speed = car.topSpeed;
-    car.laneOffset = car.dir > 0 ? -3.4 : 3.4;
-    car.laneTarget = car.laneOffset;
-    world.trafficCars.push(car);
+  /** True when a point sits on asphalt (within a road strip). */
+  function onRoad(x, z) {
+    for (const line of roadLines) {
+      if (Math.abs(x - line) < ROAD / 2 + 1 || Math.abs(z - line) < ROAD / 2 + 1) return true;
+    }
+    return false;
   }
 
-  // Pedestrians strolling the sidewalks.
-  const pedColors = [0xffd23d, 0x3dd8ff, 0xff6b9d, 0x9dff6b, 0xffffff, 0xff9a3d];
-  for (let i = 0; i < 16; i++) {
-    const g = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.32, 0.4, 1.15, 8),
-      new THREE.MeshStandardMaterial({ color: pick(rng, pedColors), roughness: 0.8 }),
-    );
-    body.position.y = 0.95;
-    g.add(body);
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.26, 10, 8),
-      new THREE.MeshStandardMaterial({ color: 0xe8b98a, roughness: 0.7 }),
-    );
-    head.position.y = 1.75;
-    g.add(head);
-    scene.add(g);
-    world.pedestrians.push({
-      mesh: g,
-      x: range(rng, -HALF + 10, HALF - 10),
-      z: range(rng, -HALF + 10, HALF - 10),
-      angle: range(rng, 0, Math.PI * 2),
-      speed: range(rng, 1.1, 2.0),
-      state: 'walk',
-      timer: range(rng, 2, 8),
-      down: 0,
-    });
+  /** Nearest road centre line distance, for steering helpers. */
+  function roadDistance(x, z) {
+    let best = Infinity;
+    for (const line of roadLines) {
+      best = Math.min(best, Math.abs(x - line), Math.abs(z - line));
+    }
+    return best;
   }
 
-  // Cash pickups glowing on sidewalks.
-  for (let i = 0; i < 10; i++) {
-    const mesh = new THREE.Mesh(
-      new THREE.TorusGeometry(0.55, 0.16, 10, 20),
-      new THREE.MeshStandardMaterial({ color: 0x7dff9a, emissive: 0x2fd85e, emissiveIntensity: 1.6 }),
-    );
-    mesh.rotation.x = Math.PI / 2;
-    mesh.position.set(range(rng, -HALF + 12, HALF - 12), 1.0, range(rng, -HALF + 12, HALF - 12));
-    scene.add(mesh);
-    world.pickups.push({ mesh, x: mesh.position.x, z: mesh.position.z, taken: false, spin: rng() * 6 });
-  }
-
-  // Mission beacons are created by the game, not the world.
-  return world;
-}
-
-// Push a circle (x,z,r) out of every building box; returns corrected position.
-export function collideBuildings(world, x, z, r) {
-  for (const b of world.buildingBoxes) {
-    const cx = Math.max(b.minX, Math.min(x, b.maxX));
-    const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
-    const dx = x - cx;
-    const dz = z - cz;
-    const d2 = dx * dx + dz * dz;
-    if (d2 < r * r) {
-      if (d2 < 0.0001) {
-        x = b.maxX + r;
-        continue;
+  /**
+   * Push a circle (x, z, radius r) out of every building it overlaps.
+   * Returns the corrected position and whether anything was hit.
+   */
+  function resolveCircle(x, z, r) {
+    let hit = false;
+    for (const b of buildings) {
+      const nearX = Math.max(b.minX, Math.min(x, b.maxX));
+      const nearZ = Math.max(b.minZ, Math.min(z, b.maxZ));
+      const dx = x - nearX;
+      const dz = z - nearZ;
+      const distSq = dx * dx + dz * dz;
+      if (distSq >= r * r) continue;
+      hit = true;
+      if (distSq > 0.0001) {
+        const dist = Math.sqrt(distSq);
+        x = nearX + (dx / dist) * r;
+        z = nearZ + (dz / dist) * r;
+      } else {
+        // Dead centre inside a box: shove out along the shortest face.
+        const pushLeft = x - b.minX;
+        const pushRight = b.maxX - x;
+        const pushUp = z - b.minZ;
+        const pushDown = b.maxZ - z;
+        const smallest = Math.min(pushLeft, pushRight, pushUp, pushDown);
+        if (smallest === pushLeft) x = b.minX - r;
+        else if (smallest === pushRight) x = b.maxX + r;
+        else if (smallest === pushUp) z = b.minZ - r;
+        else z = b.maxZ + r;
       }
-      const d = Math.sqrt(d2);
-      x = cx + (dx / d) * r;
-      z = cz + (dz / d) * r;
+    }
+    return { x, z, hit };
+  }
+
+  /** A random intersection, optionally at least `minDist` from a point. */
+  function randomJunction(minDist, fromX, fromZ) {
+    for (let tries = 0; tries < 24; tries += 1) {
+      const junction = rng.pick(intersections);
+      const dx = junction.x - (fromX ?? 0);
+      const dz = junction.z - (fromZ ?? 0);
+      if (Math.hypot(dx, dz) >= (minDist ?? 0)) return { x: junction.x, z: junction.z };
+    }
+    const junction = rng.pick(intersections);
+    return { x: junction.x, z: junction.z };
+  }
+
+  /** A random point on a road, for mission targets and parked cars. */
+  function randomRoadPoint(minDist, fromX, fromZ) {
+    const junction = randomJunction(minDist, fromX, fromZ);
+    const along = rng.pick(['x', 'z']);
+    const offset = rng.range(-PITCH / 2 + 8, PITCH / 2 - 8);
+    return along === 'x'
+      ? { x: junction.x + offset, z: junction.z + rng.pick([-3.4, 3.4]) }
+      : { x: junction.x + rng.pick([-3.4, 3.4]), z: junction.z + offset };
+  }
+
+  let elapsed = 0;
+  const LIGHT_CYCLE = 16;
+  const BULB_COLORS = { red: 0xff2d2d, amber: 0xffb02d, green: 0x2dff6b, off: 0x331111 };
+
+  /** Blink the neon and cycle the traffic lights. */
+  function update(dt) {
+    elapsed += dt;
+    for (const sign of signs) {
+      const glow = 0.75 + 0.25 * Math.sin(elapsed * sign.speed + sign.phase);
+      sign.material.opacity = glow;
+    }
+    const phase = (elapsed % LIGHT_CYCLE) / LIGHT_CYCLE;
+    for (const light of trafficLights) {
+      const northSouth = phase < 0.5;
+      const amberNow = (phase > 0.42 && phase < 0.5) || (phase > 0.92);
+      for (const bulb of light.bulbs) {
+        let lit = false;
+        if (bulb.name === 'green') lit = northSouth && !amberNow;
+        if (bulb.name === 'amber') lit = amberNow;
+        if (bulb.name === 'red') lit = !northSouth && !amberNow;
+        bulb.mesh.material.color.setHex(lit ? BULB_COLORS[bulb.name] : BULB_COLORS.off);
+      }
     }
   }
-  const lim = world.bounds - 2;
-  x = Math.max(-lim, Math.min(lim, x));
-  z = Math.max(-lim, Math.min(lim, z));
-  return { x, z };
-}
 
-export function dist2(ax, az, bx, bz) {
-  const dx = ax - bx;
-  const dz = az - bz;
-  return dx * dx + dz * dz;
+  return {
+    buildings,
+    intersections,
+    roadLines,
+    onRoad,
+    roadDistance,
+    resolveCircle,
+    randomJunction,
+    randomRoadPoint,
+    update,
+    spawn: { x: 30, z: 150, heading: Math.PI },
+    bounds: HALF + ROAD,
+    limit: 3 * PITCH - PITCH / 2,
+  };
 }
