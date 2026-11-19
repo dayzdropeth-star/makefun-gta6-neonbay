@@ -74,7 +74,17 @@ function skyAt(hour, target) {
 export function createSky(scene, rng) {
   const sun = new THREE.DirectionalLight(0xffb36b, 2.2);
   sun.position.set(120, 180, 60);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -170;
+  sun.shadow.camera.right = 170;
+  sun.shadow.camera.top = 170;
+  sun.shadow.camera.bottom = -170;
+  sun.shadow.camera.near = 10;
+  sun.shadow.camera.far = 700;
+  sun.shadow.bias = -0.0008;
   scene.add(sun);
+  scene.add(sun.target);
 
   const hemi = new THREE.HemisphereLight(0x8fa8c0, 0x1a1410, 0.9);
   scene.add(hemi);
