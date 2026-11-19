@@ -21,53 +21,55 @@ const NEON_COLORS = ['#ff2d78', '#00e5ff', '#ffe14d', '#7cff5e', '#ff8a3d', '#c7
 const TOWER_COLORS = [0x2a3040, 0x35324a, 0x2e3a44, 0x40342e, 0x2c2f38, 0x3a2f42];
 
 /** Paint a windows texture: dark glass with a random scatter of lit rooms. */
-function windowsTexture(rng, litRatio) {
+function windowsTexture(rng, litRatio, maxAniso = 1) {
   const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 128;
+  canvas.width = 256;
+  canvas.height = 512;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#05070c';
-  ctx.fillRect(0, 0, 64, 128);
+  ctx.fillRect(0, 0, 256, 512);
   const warm = ['#ffd28a', '#ffe9b8', '#ffb36b'];
   const cool = ['#9fd8ff', '#c9f2ff', '#7cc7ff'];
-  for (let row = 0; row < 16; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
+  for (let row = 0; row < 32; row += 1) {
+    for (let col = 0; col < 16; col += 1) {
       if (!rng.chance(litRatio)) continue;
       ctx.fillStyle = rng.chance(0.65) ? rng.pick(warm) : rng.pick(cool);
-      ctx.fillRect(3 + col * 7.5, 4 + row * 7.5, 5, 4.5);
+      ctx.fillRect(8 + col * 15, 12 + row * 15, 10, 9);
     }
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = maxAniso;
   return texture;
 }
 
 /** Paint a glowing shop sign with one word on it. */
-function neonTexture(word, colour) {
+function neonTexture(word, colour, maxAniso = 1) {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
+  canvas.width = 1024;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, 256, 64);
-  ctx.font = 'bold 40px Arial, sans-serif';
+  ctx.clearRect(0, 0, 1024, 256);
+  ctx.font = 'bold 160px Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.shadowColor = colour;
-  ctx.shadowBlur = 18;
+  ctx.shadowBlur = 72;
   ctx.fillStyle = colour;
-  ctx.fillText(word, 128, 34);
-  ctx.shadowBlur = 6;
+  ctx.fillText(word, 512, 136);
+  ctx.shadowBlur = 24;
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(word, 128, 34);
+  ctx.fillText(word, 512, 136);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = maxAniso;
   return texture;
 }
 
 function box(w, h, d, material) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   return mesh;
 }
 
@@ -76,7 +78,7 @@ function box(w, h, d, material) {
  * collision, road tests, spawn points and the per-frame update for blinking
  * signs and traffic lights.
  */
-export function buildCity(scene, rng) {
+export function buildCity(scene, rng, maxAniso = 1) {
   const buildings = [];
   const signs = [];
   const intersections = [];
@@ -86,6 +88,7 @@ export function buildCity(scene, rng) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(680, 680), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.08;
+  ground.receiveShadow = true;
   scene.add(ground);
 
   // The bay: open water south of the city, catching the neon.
@@ -148,7 +151,7 @@ export function buildCity(scene, rng) {
   scene.add(dashes);
 
   // Towers: each block holds one to four lots; height grows toward downtown.
-  const windowSets = [windowsTexture(rng, 0.42), windowsTexture(rng, 0.3), windowsTexture(rng, 0.55)];
+  const windowSets = [windowsTexture(rng, 0.42, maxAniso), windowsTexture(rng, 0.3, maxAniso), windowsTexture(rng, 0.55, maxAniso)];
   const towerMats = TOWER_COLORS.map(
     (color, index) => new THREE.MeshStandardMaterial({
       color, roughness: 0.85, metalness: 0.15,
@@ -191,7 +194,7 @@ export function buildCity(scene, rng) {
           const word = rng.pick(NEON_WORDS);
           const colour = rng.pick(NEON_COLORS);
           const signMat = new THREE.MeshBasicMaterial({
-            map: neonTexture(word, colour), transparent: true, side: THREE.DoubleSide, toneMapped: false,
+            map: neonTexture(word, colour, maxAniso), transparent: true, side: THREE.DoubleSide, toneMapped: false,
           });
           const sign = new THREE.Mesh(new THREE.PlaneGeometry(13, 3.2), signMat);
           const face = rng.pick(['north', 'south', 'east', 'west']);
