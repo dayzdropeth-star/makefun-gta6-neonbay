@@ -1,167 +1,301 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NEON BAY — Open World Mengemudi</title>
+<title>NEON BAY — Kota Neon, Jalanan Bebas</title>
 <style>
   :root {
     --neon-pink: #ff2d78;
-    --neon-yellow: #ffe14d;
     --neon-cyan: #00e5ff;
-    --panel: rgba(8, 10, 20, 0.72);
-    --panel-border: rgba(255, 45, 120, 0.45);
+    --neon-yellow: #ffe14d;
+    --neon-green: #2dff6b;
+    --panel: rgba(8, 10, 22, 0.82);
+    --panel-line: rgba(0, 229, 255, 0.35);
+    --text: #eef4ff;
+    --dim: #9aa8c7;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0e1a; font-family: "Segoe UI", Arial, sans-serif; color: #eef2ff; }
-  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; backdrop-filter: blur(3px); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #05060d; }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: var(--text);
+    user-select: none;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
 
-  #hud-top { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; min-width: 210px; z-index: 5; }
-  #cash { font-size: 26px; font-weight: 800; color: var(--neon-yellow); letter-spacing: 0.5px; }
-  #stars { font-size: 22px; letter-spacing: 3px; color: #ffd7e8; }
-  #stars.hot { color: #ff2d2d; text-shadow: 0 0 12px #ff2d2d; }
-  #clock, #weather { font-size: 14px; color: #c9d4ff; }
-  #clock::before { content: "🕐 "; }
-  #weather::before { content: "☁ "; }
+  /* ---------- HUD atas ---------- */
+  #hud-top {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 12px 14px; pointer-events: none; z-index: 5;
+  }
+  .hud-box {
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.12);
+    backdrop-filter: blur(4px);
+  }
+  #hud-clock { font-size: 22px; font-weight: 800; letter-spacing: 2px; color: var(--neon-cyan); }
+  #hud-date { font-size: 11px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase; }
+  #hud-weather { font-size: 13px; margin-top: 2px; color: var(--text); }
+  #hud-weather .wet { color: var(--neon-yellow); font-weight: 700; }
+  #hud-cash { font-size: 22px; font-weight: 800; color: var(--neon-green); text-align: right; }
+  #hud-cash small { display: block; font-size: 10px; color: var(--dim); letter-spacing: 2px; }
+  #hud-wanted { text-align: right; margin-top: 4px; font-size: 20px; letter-spacing: 3px; }
+  #hud-wanted .star { color: #3a4152; text-shadow: none; }
+  #hud-wanted .star.lit { color: var(--neon-yellow); text-shadow: 0 0 10px rgba(255, 225, 77, 0.9); }
+  #hud-wanted-label { font-size: 10px; color: var(--dim); letter-spacing: 2px; text-align: right; }
 
-  #minimap-wrap { position: fixed; top: 12px; right: 12px; padding: 6px; z-index: 5; }
-  #minimap { display: block; width: 190px; height: 190px; border-radius: 6px; }
+  /* ---------- Objektif misi ---------- */
+  #hud-objective {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    max-width: 560px; text-align: center; z-index: 5; pointer-events: none;
+  }
+  #hud-mission-title {
+    font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--neon-pink); font-weight: 800;
+  }
+  #hud-objective-text {
+    font-size: 15px; font-weight: 600; margin-top: 3px;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+  }
 
-  #mission-box { position: fixed; left: 12px; bottom: 12px; padding: 10px 14px; max-width: 430px; z-index: 5; }
-  #mission { font-size: 15px; font-weight: 700; }
-  #mission-timer { font-size: 20px; font-weight: 800; color: var(--neon-yellow); }
+  /* ---------- HUD bawah ---------- */
+  #hud-bottom {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding: 12px 14px; pointer-events: none; z-index: 5;
+  }
+  #hud-speed { font-size: 34px; font-weight: 900; color: var(--text); line-height: 1; }
+  #hud-speed small { font-size: 13px; color: var(--dim); font-weight: 600; }
+  #hud-gear { font-size: 12px; color: var(--neon-cyan); letter-spacing: 2px; margin-top: 4px; }
+  #hud-minimap {
+    border: 1px solid var(--panel-line); border-radius: 10px;
+    background: rgba(5, 8, 18, 0.85);
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.12);
+  }
+  #hud-hint { font-size: 12px; color: var(--dim); text-align: right; line-height: 1.6; }
+  #hud-hint b { color: var(--text); }
 
-  #speed-box { position: fixed; right: 14px; bottom: 12px; padding: 8px 16px; z-index: 5; text-align: right; }
-  #speed { font-size: 30px; font-weight: 800; color: #ffffff; }
-  #hint { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); font-size: 13px; color: #b9c4e8; text-shadow: 0 1px 3px #000; z-index: 4; white-space: nowrap; }
+  /* ---------- Tombol HUD ---------- */
+  #hud-buttons {
+    position: fixed; right: 14px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 8px; z-index: 6;
+  }
+  .hud-btn {
+    pointer-events: auto; cursor: pointer;
+    width: 42px; height: 42px; border-radius: 50%;
+    border: 1px solid var(--panel-line); background: var(--panel);
+    color: var(--text); font-size: 18px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .hud-btn:hover { border-color: var(--neon-cyan); color: var(--neon-cyan); }
 
-  #toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%) translateY(-8px); padding: 9px 18px; font-size: 15px; font-weight: 700; opacity: 0; transition: opacity 0.25s, transform 0.25s; pointer-events: none; z-index: 8; }
-  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* ---------- Toast ---------- */
+  #hud-toast {
+    position: fixed; bottom: 208px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--neon-yellow);
+    color: var(--neon-yellow); font-weight: 700; font-size: 15px;
+    padding: 10px 18px; border-radius: 999px; z-index: 7;
+    opacity: 0; transition: opacity 0.25s ease; pointer-events: none;
+    white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis;
+  }
+  #hud-toast.show { opacity: 1; }
+  #hud-status {
+    position: fixed; top: 100px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: var(--dim); z-index: 5; pointer-events: none;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  }
 
-  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(4, 6, 14, 0.62); z-index: 10; }
-  .overlay.show { display: flex; }
-  .card { max-width: 560px; width: calc(100% - 32px); padding: 28px 30px; text-align: center; }
-  .card h1 { margin: 0 0 4px; font-size: 54px; letter-spacing: 6px; color: var(--neon-pink); text-shadow: 0 0 18px var(--neon-pink), 0 0 46px rgba(255, 45, 120, 0.6); }
-  .card h2 { margin: 0 0 10px; font-size: 30px; letter-spacing: 2px; }
-  .card p { margin: 8px 0; font-size: 15px; line-height: 1.55; color: #d5dcf5; }
-  .card .tagline { color: var(--neon-cyan); font-weight: 700; letter-spacing: 1px; }
-  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
-  button { cursor: pointer; border: 1px solid var(--neon-pink); background: rgba(255, 45, 120, 0.16); color: #fff; font-size: 15px; font-weight: 700; padding: 10px 18px; border-radius: 8px; }
-  button:hover { background: rgba(255, 45, 120, 0.38); }
-  button.primary { background: var(--neon-pink); font-size: 17px; padding: 12px 26px; }
-  button.primary:hover { background: #ff4d8d; }
-  button.ghost { border-color: #3a4152; background: rgba(255, 255, 255, 0.06); }
-  .missions { text-align: left; margin: 14px auto 0; max-width: 460px; font-size: 14px; line-height: 1.7; }
-  .missions b { color: var(--neon-yellow); }
-  .keys { font-size: 13px; color: #9aa7cf; margin-top: 12px; line-height: 1.8; }
-  #busted-stats, #complete-text { font-size: 17px; font-weight: 700; color: var(--neon-yellow); }
-  #help .card { text-align: left; }
-  #help h2 { text-align: center; }
+  /* ---------- Layar penuh (cover / jeda / busted / complete / bantuan) ---------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(10, 12, 30, 0.55), rgba(3, 4, 10, 0.92));
+    backdrop-filter: blur(3px);
+  }
+  .overlay.hidden { display: none; }
+  .card {
+    max-width: 620px; width: calc(100vw - 40px);
+    background: rgba(8, 11, 26, 0.94);
+    border: 1px solid var(--panel-line); border-radius: 16px;
+    padding: 34px 36px; text-align: center;
+    box-shadow: 0 0 60px rgba(255, 45, 120, 0.18), 0 0 40px rgba(0, 229, 255, 0.12);
+  }
+  .game-title {
+    font-size: 56px; font-weight: 900; letter-spacing: 6px; line-height: 1;
+    background: linear-gradient(90deg, var(--neon-pink), var(--neon-cyan));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 34px rgba(255, 45, 120, 0.35);
+  }
+  .game-tagline { margin-top: 8px; font-size: 14px; color: var(--dim); letter-spacing: 2px; }
+  .card p { margin-top: 16px; font-size: 15px; line-height: 1.65; color: #cdd8f2; }
+  .card p b { color: var(--neon-yellow); }
+  .big-btn {
+    display: inline-block; margin-top: 24px; cursor: pointer;
+    font-size: 18px; font-weight: 800; letter-spacing: 2px;
+    color: #081018; background: linear-gradient(90deg, var(--neon-cyan), var(--neon-green));
+    border: none; border-radius: 999px; padding: 14px 34px;
+    box-shadow: 0 0 26px rgba(0, 229, 255, 0.45);
+  }
+  .big-btn:hover { filter: brightness(1.12); }
+  .big-btn.ghost {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--panel-line); box-shadow: none; font-size: 15px;
+  }
+  .big-btn.danger { background: linear-gradient(90deg, var(--neon-pink), #ff5e5e); color: #fff; }
+  .keys-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 22px;
+    text-align: left; margin-top: 20px; font-size: 14px; color: #cdd8f2;
+  }
+  .keys-grid b {
+    display: inline-block; min-width: 74px; text-align: center;
+    background: #171c30; border: 1px solid #39415e; border-radius: 6px;
+    padding: 2px 8px; margin-right: 8px; color: var(--neon-cyan); font-size: 12px;
+  }
+  #hud-busted-title { color: #ff5e5e; font-size: 44px; }
+  #hud-complete-title { color: var(--neon-green); font-size: 44px; }
+  #hud-fine { font-size: 20px; color: var(--neon-yellow); font-weight: 800; margin-top: 10px; }
+  #hud-complete-reward { font-size: 20px; color: var(--neon-green); font-weight: 800; margin-top: 10px; }
+  .foot-note { margin-top: 22px; font-size: 11px; color: #5c6884; letter-spacing: 1px; }
+  @media (max-width: 640px) {
+    .game-title { font-size: 38px; }
+    .keys-grid { grid-template-columns: 1fr; }
+    #hud-speed { font-size: 26px; }
+    #hud-objective { max-width: 70vw; }
+  }
 </style>
 </head>
 <body>
-<canvas id="view" aria-label="NEON BAY: game mengemudi open-world di kota neon"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
+<div id="stage"></div>
 
-<div id="hud-top" class="panel">
-  <div id="cash">$0</div>
-  <div id="stars">☆☆☆☆☆</div>
-  <div id="clock">18:24</div>
-  <div id="weather">Cerah</div>
-</div>
-
-<div id="minimap-wrap" class="panel"><canvas id="minimap" width="190" height="190"></canvas></div>
-
-<div id="mission-box" class="panel">
-  <div id="mission">Pilih misi di menu (1/2/3) atau jelajahi kota.</div>
-  <div id="mission-timer"></div>
-</div>
-
-<div id="speed-box" class="panel"><div id="speed">Jalan kaki</div></div>
-<div id="hint">Tekan Enter untuk mulai</div>
-<div id="toast" class="panel"></div>
-
-<div id="title" class="overlay">
-  <div class="card panel">
-    <h1>NEON BAY</h1>
-    <p class="tagline">KOTA NEON · MOBIL · MISI · POLISI</p>
-    <p>Senja turun di Neon Bay. Jalanan basah memantulkan neon, taksi berebut
-       penumpang, dan polisi mengawasi dari tiap persimpangan. Ambil mobil,
-       selesaikan misi, dan jangan sampai tertangkap.</p>
-    <div class="btn-row">
-      <button id="btn-start" class="primary">▶ MULAI JELAJAH</button>
-      <button id="btn-help" class="ghost">Cara Main</button>
-    </div>
-    <div class="missions">
-      <div><b>1 · Paket Kilat</b> — ambil paket, antar sebelum waktu habis. $120</div>
-      <div><b>2 · Lolos dari Kejaran</b> — bertahan 60 detik dari kejaran polisi. $200</div>
-      <div><b>3 · Taksi Kilat</b> — jemput penumpang, antar secepatnya. $150 + bonus</div>
-      <div><b>4 · Kurir Neon</b> — job kurir berulang setelah misi cerita selesai.</div>
-    </div>
-    <div class="btn-row">
-      <button id="btn-m1">Misi 1</button>
-      <button id="btn-m2">Misi 2</button>
-      <button id="btn-m3">Misi 3</button>
-      <button id="btn-courier">Kurir Neon</button>
-    </div>
-    <p class="keys">WASD / panah: mengemudi &amp; jalan · E: naik/turun/curi mobil · Spasi: rem tangan<br>
-       H: klakson · M: suara · P / Esc: jeda · 1–4: mulai misi</p>
+<!-- HUD atas: jam + cuaca | uang + wanted -->
+<div id="hud-top">
+  <div class="hud-box">
+    <div id="hud-clock">18:24</div>
+    <div id="hud-date">NEON BAY</div>
+    <div id="hud-weather">Cerah</div>
   </div>
-</div>
-
-<div id="pause" class="overlay">
-  <div class="card panel">
-    <h2>JEDA</h2>
-    <p>Permainan dijeda. Kota tetap berdenyut di luar sana.</p>
-    <div class="btn-row">
-      <button id="btn-resume" class="primary">Lanjutkan</button>
-      <button id="btn-restart" class="ghost">Kembali ke Spawn</button>
+  <div class="hud-box">
+    <div id="hud-cash"><small>UANG</small>$<span id="hud-cash-value">0</span></div>
+    <div id="hud-wanted-label">WANTED</div>
+    <div id="hud-wanted" aria-label="bintang wanted">
+      <span class="star" data-star="1">&#9733;</span><span class="star" data-star="2">&#9733;</span><span class="star" data-star="3">&#9733;</span><span class="star" data-star="4">&#9733;</span><span class="star" data-star="5">&#9733;</span>
     </div>
   </div>
 </div>
 
-<div id="busted" class="overlay">
-  <div class="card panel">
-    <h2>🚨 TERTANGKAP!</h2>
-    <p>Polisi Neon Bay berhasil menangkapmu. Denda dipotong dari uangmu.</p>
-    <p id="busted-stats"></p>
-    <div class="btn-row">
-      <button id="btn-again" class="primary">Kembali ke Jalan (R)</button>
+<!-- Objektif misi -->
+<div id="hud-objective">
+  <div id="hud-mission-title">NEON BAY</div>
+  <div id="hud-objective-text">Dekati penanda biru untuk memulai misi.</div>
+</div>
+
+<!-- HUD bawah: kecepatan | minimap | petunjuk -->
+<div id="hud-bottom">
+  <div class="hud-box">
+    <div id="hud-speed">0 <small>km/j</small></div>
+    <div id="hud-gear">JALAN KAKI</div>
+  </div>
+  <canvas id="hud-minimap" width="180" height="180"></canvas>
+  <div id="hud-hint">
+    <b>W A S D</b> bergerak &middot; <b>Mouse</b> lihat sekeliling<br>
+    <b>E</b> naik / turun mobil &middot; <b>H</b> klakson<br>
+    <b>Spasi</b> rem tangan &middot; <b>P</b> jeda &middot; <b>M</b> suara
+  </div>
+</div>
+
+<!-- Tombol samping -->
+<div id="hud-buttons">
+  <button class="hud-btn" id="btn-pause" title="Jeda (P)">II</button>
+  <button class="hud-btn" id="btn-mute" title="Suara hidup/mati (M)">&#9834;</button>
+  <button class="hud-btn" id="btn-help" title="Cara main (F1)">?</button>
+</div>
+
+<div id="hud-toast"></div>
+<div id="hud-status">Memuat kota Neon Bay&hellip;</div>
+
+<!-- Layar awal -->
+<div class="overlay" id="hud-start">
+  <div class="card">
+    <div class="game-title">NEON BAY</div>
+    <div class="game-tagline">KOTA NEON &middot; JALANAN BEBAS &middot; TANPA ATURAN</div>
+    <p>
+      Senja turun di kota pelabuhan <b>Neon Bay</b>. Kamu berdiri di trotoar
+      dengan mobil magenta di sampingmu. Ambil mobil itu, antar paket,
+      jemput penumpang, dan kabur dari kejaran polisi — tapi hati-hati,
+      lima bintang wanted berarti seluruh kota memburumu.
+    </p>
+    <button class="big-btn" id="btn-start">MULAI JELAJAH</button>
+    <button class="big-btn ghost" id="btn-start-help">CARA MAIN</button>
+    <div class="foot-note">GAME ORIGINAL &middot; TANPA ASET GAME KOMERSIAL &middot; JALAN OFFLINE</div>
+    <div class="foot-note">Kota yang sama setiap kali: tambah <b>?seed=katamu</b> di alamat untuk dunia berbeda.</div>
+  </div>
+</div>
+
+<!-- Layar jeda -->
+<div class="overlay hidden" id="hud-pause">
+  <div class="card">
+    <div class="game-title" style="font-size: 40px;">JEDA</div>
+    <p>Game dijeda. Kota Neon Bay menunggumu kembali.</p>
+    <button class="big-btn" id="btn-resume">LANJUTKAN</button>
+    <button class="big-btn ghost" id="btn-restart">MULAI DARI AWAL</button>
+    <div class="foot-note">Tekan P atau Esc untuk melanjutkan</div>
+  </div>
+</div>
+
+<!-- Layar tertangkap -->
+<div class="overlay hidden" id="hud-busted">
+  <div class="card">
+    <div class="game-title" id="hud-busted-title">TERTANGKAP!</div>
+    <p id="hud-busted-text">Polisi Neon Bay berhasil menangkapmu di tengah jalan.</p>
+    <div id="hud-fine"></div>
+    <button class="big-btn danger" id="btn-busted-retry">COBA LAGI</button>
+    <div class="foot-note">Denda dipotong dari uangmu. Wanted kembali ke nol.</div>
+  </div>
+</div>
+
+<!-- Layar misi selesai -->
+<div class="overlay hidden" id="hud-complete">
+  <div class="card">
+    <div class="game-title" id="hud-complete-title">MISI SELESAI!</div>
+    <p id="hud-complete-text">Kerja bagus. Paket sampai, bayaran masuk.</p>
+    <div id="hud-complete-reward"></div>
+    <button class="big-btn" id="btn-complete-next">LANJUT MISI BERIKUTNYA</button>
+    <div class="foot-note" id="hud-complete-note"></div>
+  </div>
+</div>
+
+<!-- Layar bantuan -->
+<div class="overlay hidden" id="hud-help">
+  <div class="card">
+    <div class="game-title" style="font-size: 34px;">CARA MAIN</div>
+    <div class="keys-grid">
+      <div><b>W A S D</b> Gas / rem / belok</div>
+      <div><b>Mouse</b> Putar kamera (klik dulu)</div>
+      <div><b>E</b> Naik / turun / curi mobil</div>
+      <div><b>H</b> Klakson</div>
+      <div><b>Spasi</b> Rem tangan</div>
+      <div><b>P / Esc</b> Jeda</div>
+      <div><b>M</b> Suara hidup / mati</div>
+      <div><b>F1</b> Panel bantuan ini</div>
     </div>
+    <p>
+      Dekati <b>penanda biru</b> untuk mengambil misi, ikuti penanda
+      <b>kuning</b> lalu <b>hijau</b>. Menabrak mobil atau mencuri menaikkan
+      wanted — di bintang 3 ke atas polisi mulai mengejar. Bila polisi
+      menyentuhmu saat wanted tinggi, kamu tertangkap dan kena denda.
+      Uang dan misi tersimpan otomatis di browser ini.
+    </p>
+    <button class="big-btn" id="btn-help-close">TUTUP</button>
   </div>
 </div>
 
-<div id="complete" class="overlay">
-  <div class="card panel">
-    <h2>✅ MISI SELESAI</h2>
-    <p id="complete-text"></p>
-  </div>
-</div>
-
-<div id="help" class="overlay">
-  <div class="card panel">
-    <h2>CARA MAIN</h2>
-    <p><b>Mengemudi:</b> W gas, S rem/mundur, A/D belok, Spasi rem tangan. Kamera
-       mengikuti dari jauh dan tinggi supaya kamu melihat jalan di depan.</p>
-    <p><b>Jalan kaki:</b> kamu mulai di trotoar. Dekati mobil parkir lalu tekan E
-       untuk naik gratis. Dekati mobil yang sedang jalan lalu tekan E untuk
-       mencurinya — tapi wanted naik 1 bintang.</p>
-    <p><b>Wanted:</b> menabrak mobil dan mencuri mobil menaikkan bintang. Polisi
-       mengejar sampai 4 mobil. Sembunyi 30 detik tanpa polisi di dekatmu untuk
-       menurunkan 1 bintang. Kalau polisi menempel saat kamu pelan, kamu tertangkap.</p>
-    <p><b>Cuaca &amp; waktu:</b> jam berjalan dari senja ke malam ke pagi. Hujan
-       dan badai membuat jalan licin: mobil lebih lambat dan mudah selip.
-       Jam sibuk (07–09 &amp; 17–19) membuat lalu lintas paling padat.</p>
-    <p><b>Misi:</b> ikuti beacon kuning di dunia dan di minimap. Selesaikan 3
-       misi cerita untuk membuka job Kurir Neon yang bisa diulang.</p>
-    <p><b>Simpan:</b> uang dan misi tersimpan otomatis di browser ini.</p>
-    <div class="btn-row"><button id="btn-close-help" class="primary">Tutup</button></div>
-  </div>
-</div>
-
-<script src="./vendor/three.min.js"></script>
-<script type="module" src="./src/main.js"></script>
+<script src="vendor/three.min.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>
