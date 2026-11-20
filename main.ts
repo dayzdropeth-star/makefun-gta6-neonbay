@@ -1,35 +1,26 @@
-// NEON BAY v3 — entry for make.fun gta6-01 (Node 22, standard library only).
+// NEON BAY v4 — penyerahan entri make.fun gta6-01 (Node 22, stdlib saja).
 //
-// What this program does: it takes the game in this directory's game/
-// folder — plain static files a desktop browser loads offline (three.js
-// vendored under game/vendor/, no network request anywhere) — plus the
-// screenshots/ renders, copies both into the output directory, and writes
-// /output/dossier.json with the vendored make.fun library. The dossier is
-// the summary the judge reads; the scorer rebuilds it with the same library
-// and compares the two byte for byte, so this file must not invent its own.
+// Tugas file ini sederhana: salin game/ (file statis yang dimainkan
+// browser secara offline — three.js sudah di-vendor di game/vendor/, tidak
+// ada request jaringan) dan screenshots/ ke direktori output, lalu tulis
+// dossier.json dengan pustaka make.fun yang sudah di-vendor. Penilai
+// membangun ulang dossier dengan pustaka yang sama dan membandingkannya
+// byte demi byte, jadi file ini tidak boleh mengarang isinya sendiri.
 //
-// The game itself: an original open-world driving game in the fictional
-// neon city of Neon Bay — day/night cycle and weather that change the
-// road grip, three kinds of traffic with rush hour, a five-star wanted
-// system with police chases, three story missions (including Taksi Kilat)
-// plus a repeatable courier job, on-foot play and car theft, a HUD with a
-// minimap, and synthesized WebAudio sound.
-//
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-//
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// Mainkan gamenya secara lokal dengan `node serve.ts`, lalu buka
+// http://localhost:8080. Untuk staging di luar grader:
 //   mkdir -p /tmp/neonbay-out && MAKEFUN_OUTPUT_DIR=/tmp/neonbay-out node main.ts
-// NEVER point MAKEFUN_OUTPUT_DIR at this repository directory itself: the
-// copy would read game/ while writing over it.
+// JANGAN PERNAH arahkan MAKEFUN_OUTPUT_DIR ke direktori repo ini sendiri:
+// penyalinan akan membaca game/ sambil menimpanya.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-// The caps the scorer applies to this entry. Only text_max_bytes shapes
-// the dossier's bytes; the rest refuse an entry the scorer would refuse, so
-// this program fails loudly instead of handing in something broken.
+// Batas yang diterapkan penilai untuk entri ini. Hanya text_max_bytes yang
+// membentuk byte dossier; sisanya menolak entri yang pasti ditolak penilai,
+// supaya program ini gagal dengan keras alih-alih menyerahkan yang rusak.
 const DOSSIER_CAPS = {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
@@ -48,8 +39,8 @@ const sourceGame = join(repoRoot, 'game');
 const sourceShots = join(repoRoot, 'screenshots');
 
 /**
- * Refuse an output directory that would corrupt the sources: the repo
- * itself, anything inside game/, or the screenshots folder.
+ * Tolak direktori output yang akan merusak sumber: repo itu sendiri,
+ * apa pun di dalam game/, atau folder screenshots.
  */
 function ensureSafeOutput(): string {
   const target = resolve(outputDir);
@@ -65,10 +56,13 @@ function ensureSafeOutput(): string {
   return target;
 }
 
-/** List the screenshot files, validating count and size up front. */
+/** Daftar file screenshot, sekaligus memeriksa jumlah dan ukuran. */
 function collectShots(): string[] {
   if (!existsSync(join(sourceGame, 'index.html'))) {
     throw new Error('game/index.html is missing — nothing to hand in');
+  }
+  if (!existsSync(join(sourceGame, 'src', 'main.js'))) {
+    throw new Error('game/src/main.js is missing — nothing to hand in');
   }
   if (!existsSync(sourceShots)) {
     throw new Error('screenshots/ is missing — take the staged screenshots first (see shots.json)');
@@ -89,7 +83,7 @@ function collectShots(): string[] {
   return names;
 }
 
-/** Copy the game and the screenshots, then write the dossier. */
+/** Salin game dan screenshot, lalu tulis dossier. */
 function publish(target: string, shotNames: string[]): number {
   mkdirSync(target, { recursive: true });
   cpSync(sourceGame, join(target, 'game'), { recursive: true });
@@ -107,7 +101,7 @@ function main(): void {
   const shotNames = collectShots();
   const gameEntries = publish(target, shotNames);
   console.log(
-    `NEON BAY v3 handed in to ${target}: ${gameEntries} game entries, ` +
+    `NEON BAY v4 handed in to ${target}: ${gameEntries} game entries, ` +
     `${shotNames.length} screenshots (${shotNames.join(', ')}), dossier.json written.`,
   );
 }
